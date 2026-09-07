@@ -234,13 +234,15 @@ export const POSITION_TARGET_PCT = 0.10;
 export const PER_ASSET_EXPOSURE_CAP_PERCENT = 10;
 
 /**
- * Total portfolio exposure ceiling, in percent of equity.
+ * Total portfolio exposure ceiling for the SIMULATION bots, in percent of
+ * equity. (The live bot uses `maxLeveragedExposurePercent` = 20 instead — this
+ * constant is read only by the sim execution files + simEngineFactory.)
  *
- * With POSITION_TARGET_PCT = 10% and this at 20%, the portfolio holds at most
- * two full positions. This is intentional: the system measures quality, not
- * quantity.
+ * Operator decision (2026-09-07): 80. With POSITION_TARGET_PCT = 10% that is
+ * room for up to 7 concurrent full positions (7 × 10% = 70%) plus a ~20% cash
+ * buffer. `validateExposureModel` enforces `maxPositions × 10% ≤ this`.
  */
-export const MAX_TOTAL_EXPOSURE_PERCENT = 20;
+export const MAX_TOTAL_EXPOSURE_PERCENT = 80;
 
 export const DEFAULT_INTRADAY_PARAMS: IntradayParams = {
   adxTrendMin: 25,

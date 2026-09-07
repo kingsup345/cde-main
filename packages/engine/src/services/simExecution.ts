@@ -69,7 +69,12 @@ export const SIM_INTRADAY_PARAMS_OVERRIDE: Partial<IntradayParams> = {
   // Operator floor: no sim position opens below $100. Per the 10% target model,
   // a budget below MIN_SIM_ENTRY_USD is SKIPPED — never bumped up.
   // This override makes buildRiskPlan enforce the same floor.
-  minOrderUsd: 100
+  minOrderUsd: 100,
+  // Operator decision (2026-09-07): the SIM intraday bot may hold up to 7
+  // concurrent positions of 10% each (≤ 80% invested). The live bot stays at
+  // its DEFAULT_INTRADAY_PARAMS values (2 / 20%) — this override is sim-only.
+  maxOpenPositions: 7,
+  maxLeveragedExposurePercent: MAX_TOTAL_EXPOSURE_PERCENT
 };
 
 /**

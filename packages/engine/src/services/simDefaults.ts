@@ -178,9 +178,10 @@ export const SIM_MAX_FUTURES_POSITIONS: Record<SimBotId, number> = {
 /**
  * Everything the bots hold in common.
  *
- * `maxPositions` is 2 — the economic capacity of a 10% target against a 20%
- * total exposure cap. Previously 5, which allowed 50% of equity to be tied up
- * in concurrent positions — exceeding the stated 20% cap on paper.
+ * `maxPositions` is 7 — an operator decision (2026-09-07): each sim bot may hold
+ * up to 7 concurrent positions of 10% equity each, i.e. up to 70% invested.
+ * `MAX_TOTAL_EXPOSURE_PERCENT` is 80 so `validateExposureModel` accepts this
+ * (7 × 10% = 70% ≤ 80%) and still leaves a ~20% cash buffer.
  *
  * `positionPercent` is 10, matching the live bot. Pro does not actually read
  * it: alg.md §3/§6 size Pro's entries from risk-level allocation
@@ -190,7 +191,7 @@ export const SIM_MAX_FUTURES_POSITIONS: Record<SimBotId, number> = {
 export const SIM_BASE_DEFAULTS = {
   riskLevel: 'medium' as const,
   initialAmount: 10000,
-  maxPositions: 2, // 2 × 10% = 20% = totalExposureCap — validated invariant
+  maxPositions: 7, // 7 × 10% = 70% ≤ 80% totalExposureCap — validated invariant
   feePercent: 0.1,
   slippagePercent: 0.05,
   executionDelaySec: 3,

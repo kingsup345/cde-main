@@ -20,14 +20,16 @@ import { isInEntryCooldown, MIN_SIM_ENTRY_USD } from './simExecution';
 import {
   DAILY_DRAWDOWN_BLOCK_PERCENT,
   WEEKLY_DRAWDOWN_LOCK_PERCENT,
-  PER_ASSET_EXPOSURE_CAP_PERCENT
+  PER_ASSET_EXPOSURE_CAP_PERCENT,
+  MAX_TOTAL_EXPOSURE_PERCENT
 } from './intradayParams';
 import { DEFAULT_PREV4H_RANGE_PARAMS, Prev4hRangeParams, readPrev4hRangePlan } from './prev4hRange';
 
 export const uid = (p: string) => `p4h-${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-/** Spec: total leveraged + spot exposure ceiling, as a fraction of equity. */
-export const MAX_TOTAL_EXPOSURE_PERCENT = 20;
+/** Total leveraged + spot exposure ceiling, as a percent of equity. Re-exported
+ *  from the single definition in intradayParams so all four bots share it. */
+export { MAX_TOTAL_EXPOSURE_PERCENT };
 
 export interface Prev4hRangeCandleSet {
   h1: Candle[];

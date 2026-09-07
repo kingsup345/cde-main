@@ -42,6 +42,8 @@ import {
   simBotDefaults,
   SIM_BOTS,
   UI_FACING_SIM_PREFIXES,
+  POSITION_TARGET_PCT,
+  MAX_TOTAL_EXPOSURE_PERCENT,
   type SimEnvOverrides
 } from '@cde/engine/execution';
 import { getMultiTimeframeData, exportMarketDataCache, importMarketDataCache, TIMEFRAME_SPECS, TIMEFRAME_ORDER, type TimeframeCacheEntry } from '@cde/engine/market-data';
@@ -102,7 +104,13 @@ const positionPercent = boundedNumber('BOT_POSITION_PERCENT', 10, 0.1, 100);
 // ONE position cap for the live bot and for all three simulations. They used to
 // disagree (live 5, sims 7), which meant the sims were measuring a strategy the
 // live bot is not allowed to run.
-const maxOpenPositions = Math.floor(boundedNumber('BOT_MAX_OPEN_POSITIONS', 5, 1, 100));
+const maxOpenPositions = Math.floor(boundedNumber('BOT_MAX_OPEN_POSITIONS', 7, 1, 100));
+// The 10%-of-equity position-target model caps concurrent full positions at
+// totalExposureCap / positionTarget (= 80% / 10% = 8). simEngineFactory's
+// validateExposureModel() THROWS every tick if a sim config exceeds this, which
+// silently freezes the bot. Clamp the value the sims receive so an operator
+// raising BOT_MAX_OPEN_POSITIONS too far can never break the sims.
+const SIM_MAX_POSITIONS_CAP = Math.floor(MAX_TOTAL_EXPOSURE_PERCENT / (POSITION_TARGET_PCT * 100));
 const scanConcurrency = Math.floor(boundedNumber('BOT_SCAN_CONCURRENCY', 5, 1, 20));
 const intervalMs = boundedNumber('BOT_SCAN_INTERVAL_SECONDS', 300, 60, 3600) * 1000;
 const REENTRY_COOLDOWN_MS = boundedNumber('BOT_REENTRY_COOLDOWN_HOURS', 24, 1, 720) * 3600 * 1000;
@@ -592,7 +600,8 @@ const SIM_ENV: SimEnvOverrides = {
   minConfidence: minConfidenceOverrideEnv,
   pathMinConfidence: pathMinConfidenceEnv,
   positionPercent,
-  maxPositions: maxOpenPositions,
+  // Never hand the sims a value the exposure model rejects — see SIM_MAX_POSITIONS_CAP.
+  maxPositions: Math.min(maxOpenPositions, SIM_MAX_POSITIONS_CAP),
   riskLevel
 };
 

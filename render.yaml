@@ -60,24 +60,25 @@ services:
         value: "medium"
       - key: BOT_SYMBOLS
         value: "100"
-      # A SIGNAL SCORE (0-100), and it reaches only the three score-scaled sim
-      # bots plus the live bot. It deliberately does NOT reach the 4H Path bot,
-      # whose "confidence" is the Wilson lower bound of a hit rate — a
-      # probability. Setting 60 there asked for a bucket that wins 60% of the
-      # time at a 1.5R target; none exists, so the bot fell silent while this
-      # read like an ordinary setting. simDefaults.ts enforces the split.
+      # A SIGNAL SCORE (0-100). Reaches the live bot and all FOUR sim bots
+      # (Intraday / Pro / Prev-4H Range / TrendBreakout) — every one of them now
+      # uses a score, so there is no probability-scaled bot left to exclude.
       - key: BOT_MIN_CONFIDENCE
         value: "60"
-      # The same floor for the one bot that speaks probabilities. Unset = 33,
-      # the calibrated default. Raise it to make bot 4 pickier; anything above
-      # ~50 will silence it, which is the point of it being a separate knob.
+      # IGNORED. The old 4H "Path" bot (which spoke probabilities) was replaced
+      # by Prev-4H Range, a score bot that takes BOT_MIN_CONFIDENCE like the
+      # rest. Kept only so an existing deploy that sets it does not error.
       - key: BOT_PATH_MIN_CONFIDENCE
         sync: false
+      # Operator ceiling only. Every sim position is sized at 10% of equity
+      # (POSITION_TARGET_PCT); this does not override that.
       - key: BOT_POSITION_PERCENT
         value: "10"
-      # Applies to the live bot AND all four sims, so they measure the strategy
-      # the live bot is actually allowed to run. The code's own base is 5; this
-      # overrides it for every bot at once.
+      # SIM bot concurrent-position cap: 7 (7 x 10% = 70% invested, ~20% cash
+      # buffer under the 80% total-exposure ceiling). The worker clamps this to
+      # MAX_TOTAL_EXPOSURE_PERCENT / POSITION_TARGET_PCT (= 8) so a too-high
+      # value can't throw EXPOSURE_MODEL_INVALID. The live bot keeps its own
+      # cap of 2 (DEFAULT_INTRADAY_PARAMS) regardless.
       - key: BOT_MAX_OPEN_POSITIONS
         value: "7"
       - key: BOT_MAX_FUTURES_POSITIONS

@@ -6,6 +6,9 @@ import {
   SIM_MIN_CONFIDENCE,
   SIM_MAX_FUTURES_POSITIONS,
   simBotDefaults,
+  validateExposureModel,
+  POSITION_TARGET_PCT,
+  MAX_TOTAL_EXPOSURE_PERCENT,
   type SimBotId
 } from '@cde/engine/execution';
 
@@ -51,10 +54,20 @@ describe('shared sim defaults', () => {
     expect(SIM_MAX_FUTURES_POSITIONS.path).toBe(2);
   });
 
-  it('caps the sims at the live bot’s position limit, not above it', () => {
-    // At 7 the simulations carried 40% more concurrent risk than the bot they
-    // exist to predict.
-    expect(SIM_BASE_DEFAULTS.maxPositions).toBe(2);
+  it('lets each sim bot hold up to 7 positions, within the exposure model', () => {
+    // Operator decision (2026-09-07): 7 concurrent positions of 10% equity each.
+    // The live bot is NOT bound to this — it keeps its own 2 via
+    // SIM_INTRADAY_PARAMS_OVERRIDE.maxOpenPositions.
+    expect(SIM_BASE_DEFAULTS.maxPositions).toBe(7);
+    // …and that must not exceed the total-exposure ceiling, or the sim engines
+    // throw EXPOSURE_MODEL_INVALID on every tick.
+    expect(SIM_BASE_DEFAULTS.maxPositions * POSITION_TARGET_PCT)
+      .toBeLessThanOrEqual(MAX_TOTAL_EXPOSURE_PERCENT / 100);
+    expect(() => validateExposureModel({
+      maxPositions: SIM_BASE_DEFAULTS.maxPositions,
+      positionTargetPct: POSITION_TARGET_PCT,
+      totalExposureCapPct: MAX_TOTAL_EXPOSURE_PERCENT / 100
+    })).not.toThrow();
   });
 
   it('returns a fresh object each call — a shared default must not be mutable state', () => {
