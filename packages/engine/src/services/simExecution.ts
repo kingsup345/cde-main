@@ -74,7 +74,28 @@ export const SIM_INTRADAY_PARAMS_OVERRIDE: Partial<IntradayParams> = {
   // concurrent positions of 10% each (≤ 80% invested). The live bot stays at
   // its DEFAULT_INTRADAY_PARAMS values (2 / 20%) — this override is sim-only.
   maxOpenPositions: 7,
-  maxLeveragedExposurePercent: MAX_TOTAL_EXPOSURE_PERCENT
+  maxLeveragedExposurePercent: MAX_TOTAL_EXPOSURE_PERCENT,
+  // Operator decision (2026-09-07): the stagnation time stop must give a trade
+  // at least an hour, not ~20 minutes. The observed run closed all 7 positions
+  // at once on "Time Stop: אחרי 20.3 דק'" — MEAN_REVERSION's 45 min max hold ×
+  // timeStopFraction 0.45 = 20.25 min, i.e. the cut fired before a 5M-timed
+  // mean-reversion entry had time to resolve at all.
+  //
+  // TWO knobs, because raising only one cannot produce the requested window:
+  // timeStopMs = maxHoldMs × timeStopFraction, and MAX_DURATION closes the
+  // position at maxHoldMs regardless — so a time stop can never sit later than
+  // the max hold that contains it. With fraction 0.7 the checkpoints become
+  // TREND_PULLBACK 84 min, BREAKOUT_RETEST 63 min, MEAN_REVERSION 63 min, each
+  // comfortably past the requested hour, with the hard budget still ahead of it.
+  // timeStopMinProgressR (0.3R) is deliberately UNCHANGED — the complaint was
+  // the clock, not the bar.
+  //
+  // SIM-ONLY. The live bot keeps DEFAULT_INTRADAY_PARAMS (45/60/120 × 0.45).
+  // Note the values are stamped onto a position at entry (buildRiskPlan writes
+  // pos.maxHoldMs/pos.timeStopMs), so positions opened before this change keep
+  // their old, shorter clocks until they close.
+  maxHoldMinutes: { TREND_PULLBACK: 120, BREAKOUT_RETEST: 90, MEAN_REVERSION: 90 },
+  timeStopFraction: 0.7
 };
 
 /**
