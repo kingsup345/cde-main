@@ -69,6 +69,7 @@ export {
   ENTRY_COOLDOWN_MS,
   isInEntryCooldown,
   MIN_SIM_ENTRY_USD,
+  blockEntry,
   generateNewOrders,
   LIMIT_ORDER_TTL_MS,
   selectFillableOrders,
@@ -146,6 +147,8 @@ export type {
 // ── TrendBreakout ("Bybit" sim bot) order generation ─────────────────────────
 export {
   generateTrendBreakoutOrders,
+  resolveScaleFractions,
+  MIN_ORDER_EXCEEDS_POSITION_TARGET,
   effectiveStop as trendBreakoutEffectiveStop
 } from './services/trendBreakoutExecution';
 export type {

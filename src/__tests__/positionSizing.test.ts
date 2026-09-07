@@ -7,7 +7,13 @@ import {
 import { DEFAULT_INTRADAY_PARAMS } from '@cde/engine';
 import { evaluatePrev4hRange, readPrev4hRangePlan, DEFAULT_PREV4H_RANGE_PARAMS } from '@cde/engine/analysis';
 import type { Candle, SignalEvaluation } from '@cde/engine';
-import { generateTrendBreakoutOrders, type TrendBreakoutOrderGenContext, type SimPosition } from '@cde/engine/execution';
+import {
+  generateTrendBreakoutOrders,
+  resolveScaleFractions,
+  MIN_ORDER_EXCEEDS_POSITION_TARGET,
+  type TrendBreakoutOrderGenContext,
+  type SimPosition
+} from '@cde/engine/execution';
 import { applyProEntryGates, type ProGateContext, calculateTradingFee, reanchorLevel } from '@cde/engine/execution';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -215,15 +221,20 @@ describe('Prev4hRange R:R Calculation', () => {
 });
 
 describe('Scale-In Fractions', () => {
-  it('Test 8: Equity=$1,000, Target=$100 → Scale 1=$50, Scale 2=$30, Scale 3=$20', () => {
-    const equity = 1_000;
+  it('Test 8: Equity=$20,000, Target=$2,000 → Scale 1=$1,000, Scale 2=$600, Scale 3=$400', () => {
+    // Equity high enough that all three nominal lots clear the $100 order floor,
+    // so resolveScaleFractions passes 5/3/2 through untouched. (At $1,000 equity
+    // the target is $100 and the nominal $50 first lot is below the floor — see
+    // the resolveScaleFractions cases below for what happens there.)
+    const equity = 20_000;
     const targetNotional = equity * 0.10;
-    const fractions = [0.5, 0.3, 0.2];
+    const fractions = resolveScaleFractions(targetNotional, [0.5, 0.3, 0.2]);
+    expect(fractions).toEqual([0.5, 0.3, 0.2]);
     const scales = fractions.map(f => targetNotional * f);
-    expect(scales[0]).toBeCloseTo(50, 2);
-    expect(scales[1]).toBeCloseTo(30, 2);
-    expect(scales[2]).toBeCloseTo(20, 2);
-    expect(scales.reduce((a, b) => a + b, 0)).toBeCloseTo(100, 2);
+    expect(scales[0]).toBeCloseTo(1_000, 2);
+    expect(scales[1]).toBeCloseTo(600, 2);
+    expect(scales[2]).toBeCloseTo(400, 2);
+    expect(scales.reduce((a, b) => a + b, 0)).toBeCloseTo(targetNotional, 2);
   });
 
   it('Test 8b: SCALE_2 via generateTrendBreakoutOrders — notional = 3% of equity', () => {
@@ -397,5 +408,114 @@ describe('Pro Engine — 10% Fixed Allocation', () => {
     expect(ev70.budgetUsd).toBeCloseTo(1000, 2);
     expect(ev90.budgetUsd).toBeCloseTo(1000, 2);
     expect(ev70.budgetUsd).toBe(ev90.budgetUsd);
+  });
+});
+
+/**
+ * The bot that could never open a position
+ * ============================================================================
+ * TrendBreakout is the only one of the four sim bots with scale-in, so it was
+ * the only one whose FIRST lot was a fraction (50%) of the 10% target. At the
+ * $1,000 equity all four bots actually run on that is $50 against a $100 order
+ * floor, and the entry was dropped by a bare `continue` — a 93%-confidence
+ * SIGNAL SPOT LONG rendered green in the panel with no position and no reason
+ * anywhere. Empirically: intraday 4 positions, pro 2, path 2, bybit 0.
+ *
+ * MIN_ORDER is still a constraint, never a sizing input — the 10% target is not
+ * inflated. What adapts is how the target is SPLIT.
+ */
+describe('TrendBreakout — MIN_ORDER splits the target instead of killing the trade', () => {
+  const target = (equity: number) => equity * 0.10;
+
+  it('leaves 5/3/2 untouched when every lot clears the $100 floor', () => {
+    expect(resolveScaleFractions(target(20_000), [0.5, 0.3, 0.2])).toEqual([0.5, 0.3, 0.2]);
+  });
+
+  it('collapses to a single full-size lot at $1,000 equity (the observed case)', () => {
+    const fractions = resolveScaleFractions(target(1_000), [0.5, 0.3, 0.2]);
+    expect(fractions).toEqual([1]);
+    expect(target(1_000) * fractions[0]).toBeCloseTo(100, 6);
+  });
+
+  it('merges only the lots that fall short — $2,500 equity gives two $125 lots', () => {
+    const fractions = resolveScaleFractions(target(2_500), [0.5, 0.3, 0.2]);
+    expect(fractions).toEqual([0.5, 0.5]);
+    expect(fractions.map(f => target(2_500) * f)).toEqual([125, 125]);
+  });
+
+  it('never sizes above the 10% target — fractions always sum to exactly 1', () => {
+    for (const equity of [1_000, 1_500, 2_000, 2_500, 5_000, 20_000]) {
+      const fractions = resolveScaleFractions(target(equity), [0.5, 0.3, 0.2]);
+      expect(fractions.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 10);
+    }
+  });
+
+  it('still refuses when even the whole target is under the floor', () => {
+    expect(resolveScaleFractions(target(800), [0.5, 0.3, 0.2])).toEqual([]);
+  });
+
+  const signalEval = (): SignalEvaluation => ({
+    symbol: 'NEAR',
+    action: 'buy',
+    tradeType: 'SPOT',
+    tradeSide: 'BUY',
+    confidence: 93,
+    price: 4.795,
+    priceChange24h: 5.06,
+    reasoning: 'TrendBreakout LONG',
+    status: 'SIGNAL SPOT LONG',
+    willExecute: true,
+    factors: [],
+    confidenceGap: 0,
+    decision: {
+      direction: 'LONG',
+      entryRef: 4.795,
+      stopLoss: 4.716713,
+      takeProfit: 4.951575,
+      riskPerUnit: 0.078287
+    } as never
+  });
+
+  const ctxFor = (equity: number, ev: SignalEvaluation): TrendBreakoutOrderGenContext => ({
+    positions: [],
+    pending: [],
+    evaluations: [ev],
+    executionDelaySec: 0,
+    dailyDrawdownPercent: 0,
+    weeklyDrawdownPercent: 0,
+    cash: equity,
+    equity,
+    totalLeveragedExposureUsd: 0,
+    exitCooldown: {},
+    priceFor: (s: string) => (s === 'NEAR' ? 4.795 : undefined),
+    candlesBySymbol: {},
+    maxConcurrentTrades: 7
+  });
+
+  it('opens a $100 position at $1,000 equity — the exact signal that was dropped', () => {
+    const ev = signalEval();
+    const orders = generateTrendBreakoutOrders(ctxFor(1_000, ev));
+    expect(orders).toHaveLength(1);
+    expect(orders[0].side).toBe('buy');
+    expect(orders[0].budgetUsd).toBeCloseTo(100, 6);
+    expect(ev.willExecute).toBe(true);
+    expect(ev.status).toBe('SIGNAL SPOT LONG');
+  });
+
+  it('below the floor it refuses LOUDLY — visible reason on the evaluation', () => {
+    const ev = signalEval();
+    const orders = generateTrendBreakoutOrders(ctxFor(800, ev));
+    expect(orders).toHaveLength(0);
+    expect(ev.willExecute).toBe(false);
+    expect(ev.strategyDecision).toBe(true);
+    expect(ev.status).toBe(`BLOCKED [${MIN_ORDER_EXCEEDS_POSITION_TARGET}]`);
+    expect(ev.factors.some(f => f.value === MIN_ORDER_EXCEEDS_POSITION_TARGET)).toBe(true);
+  });
+
+  it('a full slot book reports MAX_CONCURRENT rather than vanishing', () => {
+    const ev = signalEval();
+    const ctx = { ...ctxFor(1_000, ev), maxConcurrentTrades: 0 };
+    expect(generateTrendBreakoutOrders(ctx)).toHaveLength(0);
+    expect(ev.status).toBe('BLOCKED [MAX_CONCURRENT]');
   });
 });

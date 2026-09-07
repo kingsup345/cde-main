@@ -111,6 +111,47 @@ export const SIM_INTRADAY_PARAMS_OVERRIDE: Partial<IntradayParams> = {
  */
 export const MIN_SIM_ENTRY_USD = 100;
 
+/** Reason code shared by all four bots: the 10% target itself is under the
+ *  order floor, so there is nothing to open. Never resolved by sizing UP. */
+export const MIN_ORDER_EXCEEDS_POSITION_TARGET = 'MIN_ORDER_EXCEEDS_POSITION_TARGET';
+
+/**
+ * Records an execution-layer refusal ON the evaluation — the same surface the
+ * strategy gates use, for all four bots.
+ *
+ * Entry rejections in the order generators were bare `continue`s, so a panel
+ * could show a green "SIGNAL SPOT LONG · ביטחון 93%" for a signal the execution
+ * layer had already thrown away, with no trace anywhere. That is exactly how
+ * the Bybit bot sat at zero positions for a full run while the other three
+ * traded: a gate the operator cannot see is a gate that gets debugged by
+ * guessing. Path still had two such silent skips after the Bybit fix, which is
+ * why this lives here now instead of in one bot's file.
+ *
+ * `strategyDecision` keeps the strategy's own YES (§16) while `willExecute`
+ * becomes the final answer — the split those two fields were defined for.
+ * `status` is what the badge renders; `factors` is the decision-layers panel.
+ *
+ * Mutating the evaluation is load-bearing and safe: simEngineFactory holds the
+ * same array reference (`lastEvaluations = evaluations`) and builds the
+ * snapshot AFTER generateOrders runs, and both `status` and `factors` are in
+ * the snapshot projection.
+ */
+export function blockEntry(
+  ev: SignalEvaluation,
+  code: string,
+  message: string,
+  logPrefix = '[sim]'
+): void {
+  console.warn(`${logPrefix} ${ev.symbol}: entry blocked [${code}] — ${message}`);
+  ev.strategyDecision = ev.strategyDecision ?? ev.willExecute;
+  ev.willExecute = false;
+  ev.status = `BLOCKED [${code}]`;
+  ev.factors = [
+    ...(ev.factors ?? []),
+    { label: 'חסימת ביצוע', value: code, impact: 'negative', note: message }
+  ];
+}
+
 // ── Shared data shapes ───────────────────────────────────────────────────────
 
 export interface SimPosition {
@@ -646,9 +687,7 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
     // vanished instead of failing. Refuse it loudly instead of inventing a
     // spot short. See resolveTradeSide in intradayBridge.ts.
     if (ev.tradeType === 'SPOT' && ev.tradeSide !== 'BUY') {
-      console.warn(
-        `[sim] ${ev.symbol}: SPOT evaluation carries tradeSide="${ev.tradeSide}", expected "BUY" — entry skipped.`
-      );
+      blockEntry(ev, 'BAD_TRADE_SIDE', `SPOT עם tradeSide="${ev.tradeSide}" במקום "BUY"`);
       continue;
     }
     const orderSide: PendingOrder['side'] = ev.tradeType === 'FUTURES'
@@ -670,7 +709,14 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
       sizingMultiplier: riskMult
     });
     // MIN_ORDER is a constraint, not a sizing input. Skip when target < floor.
-    if (rawBudget < MIN_SIM_ENTRY_USD) continue;
+    if (rawBudget < MIN_SIM_ENTRY_USD) {
+      blockEntry(
+        ev,
+        MIN_ORDER_EXCEEDS_POSITION_TARGET,
+        `תקציב הכניסה $${rawBudget.toFixed(2)} < מינימום הזמנה $${MIN_SIM_ENTRY_USD} (הון $${ctx.equity.toFixed(2)}, מזומן פנוי $${workingCash.toFixed(2)})`
+      );
+      continue;
+    }
 
     const evDirection = toPositionDirection(ev.tradeSide as string);
     if (correlationCandles) {
@@ -691,7 +737,10 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
         lookback: correlationLookback,
         atrPercentile: evAtrPercentile
       });
-      if (!gate.allowed) continue;
+      if (!gate.allowed) {
+        blockEntry(ev, 'CORRELATION', gate.reason ?? 'קורלציה גבוהה מדי מול פוזיציה פתוחה');
+        continue;
+      }
     }
 
     totalPositionCount++;
@@ -872,12 +921,41 @@ export function fillDueOrders(due: PendingOrder[], cash: number, positions: SimP
       : simulateSlippage(market, sideForSlippage, costs.slippagePercent);
     const delayMs = Date.now() - order.createdAt;
 
-     if (isEntryOrder) {
-       const budget = Math.min(order.budgetUsd ?? 0, workingCash);
-       // Operator floor, enforced again at fill time: if free cash dropped
-       // below MIN_SIM_ENTRY_USD between queueing and filling, drop the order
-       // rather than open it undersized.
-       if (budget < MIN_SIM_ENTRY_USD) continue;
+    if (isEntryOrder) {
+      // Free cash is a CONSTRAINT at fill time, never a sizing input.
+      //
+      // This used to read `Math.min(order.budgetUsd ?? 0, workingCash)`, whose
+      // own comment promised to "drop the order rather than open it
+      // undersized" — but the clamp only dropped below the $100 floor. A
+      // $1,000 budget meeting $950 of free cash opened a $950 position: the
+      // last place in the codebase where a downstream mechanism silently
+      // resized the 10%-of-equity target. Three explicit refusals now, each
+      // naming itself, instead of one silent shrink.
+      const requested = order.budgetUsd ?? 0;
+
+      if (!(requested > 0)) {
+        // Persisted before PendingOrder carried budgetUsd. `?? 0` used to send
+        // it straight under the floor and out — indistinguishable in the log
+        // from a legitimately-too-small order.
+        console.warn(
+          `[sim] ${order.symbol}: entry order has no budgetUsd (queued before the field existed) — dropped rather than filled at an invented size.`
+        );
+        continue;
+      }
+      if (requested < MIN_SIM_ENTRY_USD) {
+        console.warn(
+          `[sim] ${order.symbol}: entry budget $${requested.toFixed(2)} < minimum $${MIN_SIM_ENTRY_USD} — skipped, never bumped up.`
+        );
+        continue;
+      }
+      if (requested > workingCash) {
+        console.warn(
+          `[sim] ${order.symbol}: entry needs $${requested.toFixed(2)} but only $${workingCash.toFixed(2)} is free — skipped, never downsized.`
+        );
+        continue;
+      }
+
+      const budget = requested;
 
       const isFutures = order.type === 'FUTURES';
       const leverage = order.leverage || 1;

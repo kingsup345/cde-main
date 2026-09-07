@@ -432,7 +432,13 @@ export function useProSimulationBot({ config, isRunning, cryptoData, initialSnap
     cash, positions, positionsValue, equity, trades, history: displayHistory, pending,
     totalFees, totalSlippageCost, winRate, totalTrades: trades.length, closedTrades: closedTrades.length,
     lastEvaluation, evaluations, reset, minConfidence: minConfidence ?? SIM_MIN_CONFIDENCE.pro, hasSavedSession, nextTickAt,
-    totalLeveragedExposureUsd: 0, dailyDrawdownPercent, weeklyDrawdownPercent,
+    // Was a hardcoded 0, which handed the risk meter "no exposure" no matter
+    // what the twin held. Pro is spot-only today, so this is normally 0 anyway
+    // — but a hardcoded 0 would keep reading 0 the day it isn't.
+    totalLeveragedExposureUsd: positions
+      .filter((p) => p.type === 'FUTURES')
+      .reduce((sum, p) => sum + (p.notionalUsd || 0), 0),
+    dailyDrawdownPercent, weeklyDrawdownPercent,
     candleCount: Object.keys(candlesBySymbol).length
   };
 }

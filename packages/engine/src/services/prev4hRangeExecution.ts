@@ -4,9 +4,13 @@
 // sim bots — a difference in results is a difference in DECISIONS.
 //
 // Its own:
-//   · sizing: risk-based, notional = (equity × riskPerTrade) / (R / entry),
-//     hard-capped by the shared per-asset (8%) / total (20%) caps and the
-//     $100 MIN_SIM_ENTRY_USD floor.
+//   · sizing: the shared 10%-of-equity target (positionTargetPct). The stop
+//     loss only MEASURES the resulting dollar risk — it never sets the size.
+//     Hard-capped by the shared per-asset (PER_ASSET_EXPOSURE_CAP_PERCENT = 10%)
+//     and total (MAX_TOTAL_EXPOSURE_PERCENT = 80%) caps and the $100
+//     MIN_SIM_ENTRY_USD floor.
+//     (This header used to describe risk-based sizing — (equity × riskPerTrade)
+//     / (R / entry) — and 8%/20% caps. All three numbers were stale.)
 //   · exits: SL (= range midpoint), TP (= break level ± range × tpRangeMult),
 //     END OF THE 4H WINDOW (barOpenFor(openTs) + BAR_MS), and an EMA(20) 4H
 //     trend flip against the position.
@@ -16,7 +20,12 @@ import { aggregateToH4 } from './pathEngine';
 import { barOpenFor, BAR_MS } from './pathStudy';
 import type { SignalEvaluation } from './intradayBridge';
 import type { SimPosition, PendingOrder } from './simExecution';
-import { isInEntryCooldown, MIN_SIM_ENTRY_USD } from './simExecution';
+import {
+  isInEntryCooldown,
+  MIN_SIM_ENTRY_USD,
+  MIN_ORDER_EXCEEDS_POSITION_TARGET,
+  blockEntry
+} from './simExecution';
 import {
   DAILY_DRAWDOWN_BLOCK_PERCENT,
   WEEKLY_DRAWDOWN_LOCK_PERCENT,
@@ -161,32 +170,63 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
 
   for (const ev of ranked) {
     const plan = readPrev4hRangePlan(ev);
-    if (!plan) continue;
+    if (!plan) {
+      blockEntry(ev, 'NO_PLAN', 'הערכה ללא תוכנית Prev-4H (רמות חסרות)', '[path-sim]');
+      continue;
+    }
     if (openSymbols.has(ev.symbol) || pendingEntrySymbols.has(ev.symbol) || closingSymbols.has(ev.symbol)) continue;
-    if (isInEntryCooldown(ctx.exitCooldown[ev.symbol], now)) continue;
-    if (positionCount >= ctx.maxPositions) continue;
+    if (isInEntryCooldown(ctx.exitCooldown[ev.symbol], now)) {
+      blockEntry(ev, 'ENTRY_COOLDOWN', 'צינון אחרי יציאה קודמת בנכס הזה', '[path-sim]');
+      continue;
+    }
+    if (positionCount >= ctx.maxPositions) {
+      blockEntry(ev, 'MAX_CONCURRENT', `${positionCount}/${ctx.maxPositions} פוזיציות פתוחות — אין מקום`, '[path-sim]');
+      continue;
+    }
 
     const isLong = plan.direction === 'LONG';
-    if (!isLong && futuresCount >= ctx.maxFuturesPositions) continue; // SHORT = futures
+    if (!isLong && futuresCount >= ctx.maxFuturesPositions) {
+      blockEntry(ev, 'MAX_FUTURES', `SHORT דורש FUTURES — ${futuresCount}/${ctx.maxFuturesPositions} תפוסות`, '[path-sim]');
+      continue; // SHORT = futures
+    }
     const price = plan.entryRef;
 
     // Position sizing: 10% of equity, independent of stop-loss distance.
     // SL is used only to measure the resulting dollar risk.
     const desiredNotional = ctx.equity * p.positionTargetPct;
 
+    // Both refusals below were bare `continue`s — the same blindness that hid
+    // Bybit's zero-entry run. Path is spot-first with no scale-in, so its
+    // target clears the floor at any equity ≥ $1,000; the exposure/cash branch
+    // is the one that actually bites, and it was the one saying nothing.
     if (desiredNotional < MIN_SIM_ENTRY_USD) {
-      continue; // MIN_ORDER_EXCEEDS_POSITION_TARGET — skip silently
+      blockEntry(
+        ev,
+        MIN_ORDER_EXCEEDS_POSITION_TARGET,
+        `יעד הפוזיציה $${desiredNotional.toFixed(2)} (${(p.positionTargetPct * 100).toFixed(0)}% מההון) < מינימום הזמנה $${MIN_SIM_ENTRY_USD}`,
+        '[path-sim]'
+      );
+      continue;
     }
 
     const assetUsed = exposureByBase.get(ev.symbol) ?? 0;
-    const notional = Math.min(
-      desiredNotional,
-      Math.max(0, perAssetCap - assetUsed),
-      Math.max(0, totalCap - totalExposure),
-      workingCash
-    );
+    const assetHeadroom = Math.max(0, perAssetCap - assetUsed);
+    const totalHeadroom = Math.max(0, totalCap - totalExposure);
+    const notional = Math.min(desiredNotional, assetHeadroom, totalHeadroom, workingCash);
     if (notional < MIN_SIM_ENTRY_USD) {
-      continue; // MIN_ORDER_EXCEEDS_POSITION_TARGET — cap or cash insufficient
+      const binding =
+        assetHeadroom <= totalHeadroom && assetHeadroom <= workingCash && assetHeadroom < desiredNotional
+          ? `תקרת חשיפה לנכס (${PER_ASSET_EXPOSURE_CAP_PERCENT}%) — נותרו $${assetHeadroom.toFixed(2)}`
+          : totalHeadroom <= workingCash && totalHeadroom < desiredNotional
+            ? `תקרת חשיפה כוללת (${MAX_TOTAL_EXPOSURE_PERCENT}%) — נותרו $${totalHeadroom.toFixed(2)}`
+            : `מזומן פנוי $${workingCash.toFixed(2)}`;
+      blockEntry(
+        ev,
+        MIN_ORDER_EXCEEDS_POSITION_TARGET,
+        `${binding} < מינימום הזמנה $${MIN_SIM_ENTRY_USD}`,
+        '[path-sim]'
+      );
+      continue;
     }
 
     exposureByBase.set(ev.symbol, assetUsed + notional);

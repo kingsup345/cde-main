@@ -167,6 +167,7 @@ export {
   evaluatePrev4hRange,
   readPrev4hRangePlan,
   DEFAULT_PREV4H_RANGE_PARAMS,
+  maxAdmissibleExtensionMult,
   PREV4H_MIN_H4_BARS,
   PREV4H_MIN_H1_CANDLES
 } from './services/prev4hRange';

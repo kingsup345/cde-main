@@ -48,10 +48,37 @@ export interface Prev4hRangeParams {
   minH4Bars: number;
   /** Don't chase: the break must be at most `range × this` past H/L. Beyond
     *  that the move is already made and the stop (at `mid`) is too far to size
-    *  a sane position — the bot abstains (`ENTRY_TOO_EXTENDED`). */
+    *  a sane position — the bot abstains (`ENTRY_TOO_EXTENDED`).
+    *
+    *  This is an OPERATOR cap layered on top of the geometric one. At the
+    *  default 0.5 it never binds: minRR rejects everything past 0.1818·range
+    *  first (see maxAdmissibleExtensionMult). Lower it to chase less; raising
+    *  it does nothing until minRR is lowered too. */
   maxExtensionRangeMult: number;
   /** Minimum gross risk:reward ratio required to enter. */
   minRR: number;
+}
+
+/**
+ * The furthest past H/L an entry can be and still clear `minRR`, as a fraction
+ * of the reference range. Derived, never hardcoded.
+ *
+ *   entry = H + d,  SL = mid,  TP = H + range·tpRangeMult
+ *   reward = range·tpRangeMult − d      risk = range/2 + d
+ *   reward/risk >= minRR  ⟺  d <= range · (tpRangeMult − minRR/2) / (1 + minRR)
+ *
+ * At the defaults (tpRangeMult 1.0, minRR 1.2) that is **0.1818 · range**.
+ *
+ * This exists because the R:R gate and the confidence score used to disagree
+ * about which breakouts are good ones. The `breakout` component scaled to
+ * `range × 0.5` and only reached full marks at d = 0.5·range — a distance the
+ * R:R gate always rejected — so within the admissible band it could award at
+ * most 10.9 of its 30 points, and it rewarded moving TOWARDS rejection. Both
+ * now read the same number, so they cannot drift apart again.
+ */
+export function maxAdmissibleExtensionMult(p: Prev4hRangeParams): number {
+  const geometric = (p.tpRangeMult - p.minRR / 2) / (1 + p.minRR);
+  return Math.max(0, Math.min(geometric, p.maxExtensionRangeMult));
 }
 
 export const DEFAULT_PREV4H_RANGE_PARAMS: Prev4hRangeParams = {
@@ -216,7 +243,13 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
 
   const isLong = direction === 'LONG';
   const breakoutDist = isLong ? currentPrice - H : L - currentPrice;
-  if (breakoutDist > range * p.maxExtensionRangeMult) {
+  // One admissible band, shared with the confidence score below. Previously
+  // this used maxExtensionRangeMult (0.5) directly and the RR check further
+  // down rejected everything past 0.1818 anyway — so ENTRY_TOO_EXTENDED could
+  // only fire where RR_BELOW_MIN would have fired too, and the operator saw
+  // whichever reason happened to come first in the file.
+  const maxExtension = maxAdmissibleExtensionMult(p);
+  if (breakoutDist > range * maxExtension) {
     return base('ARMED', 'ENTRY_TOO_EXTENDED', debug);
   }
 
@@ -235,7 +268,10 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   }
 
   // Confidence SCORE 0-100.
-  const breakout = clamp01(breakoutDist / (range * 0.5)) * 30;
+  // Scaled to the band the R:R gate actually admits, not to 0.5·range. With the
+  // old divisor the component topped out at 10.9/30 for any entry that could
+  // pass, and pointed the score at breakouts the gate was about to reject.
+  const breakout = clamp01(breakoutDist / (range * maxExtension)) * 30;
   const trendStrength = clamp01(Math.abs(ema - emaPrev) / (emaPrev * 0.01)) * 20;
   // Reward a range that sits in the middle of the allowed band.
   const bandPos = (rangePct - p.minRangePct) / Math.max(1e-9, p.maxRangePct - p.minRangePct);

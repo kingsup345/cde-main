@@ -4,14 +4,17 @@
 // bots — so a difference in results is a difference in DECISIONS, not in
 // plumbing. What is genuinely its own:
 //
-//   · risk-based sizing: full size = (equity × riskPerTrade) / |entry − SL|
-//     (spec §14), then hard-capped by the shared per-asset / total exposure
-//     limits (spec §15). Tight ATR stops make the per-asset 8% cap the usual
-//     binding constraint — by design.
+//   · sizing: the shared 10%-of-equity target (POSITION_TARGET_PCT). The stop
+//     loss only MEASURES the resulting dollar risk — it never sets the size.
+//     Hard-capped by the shared per-asset (PER_ASSET_EXPOSURE_CAP_PERCENT = 10%)
+//     and total (MAX_TOTAL_EXPOSURE_PERCENT = 80%) limits (spec §15).
+//     (This header used to describe risk-based sizing — (equity × riskPerTrade)
+//     / |entry − SL| — and 8%/20% caps. All three numbers were stale.)
 //   · scale-in (spec §11): the shared fill core cannot add to a position, so
 //     each of the 50/30/20 % lots is its OWN SimPosition. One logical trade =
 //     every lot with the same base asset + side. Lots share one logical
-//     SL/TP and are closed together.
+//     SL/TP and are closed together. At small equity the lots are merged so
+//     none falls under the $100 order floor — see resolveScaleFractions.
 //   · stop management (spec §12): break-even at +1R, ATR trailing from +1.5R,
 //     recomputed every tick from the immutable entry + the factory-tracked
 //     highest/lowest price (the codebase never mutates pos.stopLoss).
@@ -21,7 +24,12 @@
 import { Candle, calculateATR, calculateSupertrend } from './tradeEngine';
 import type { SignalEvaluation } from './intradayBridge';
 import type { SimPosition, PendingOrder } from './simExecution';
-import { isInEntryCooldown, MIN_SIM_ENTRY_USD } from './simExecution';
+import {
+  isInEntryCooldown,
+  MIN_SIM_ENTRY_USD,
+  MIN_ORDER_EXCEEDS_POSITION_TARGET,
+  blockEntry as blockEntryShared
+} from './simExecution';
 import {
   isInStreakCooldown,
   streakCooldownFromHistory,
@@ -43,7 +51,57 @@ export const uid = (p: string) => `tb-${p}-${Date.now()}-${Math.random().toStrin
 
 const H4_MS = 4 * 60 * 60 * 1000;
 
-export const MIN_ORDER_EXCEEDS_POSITION_TARGET = 'MIN_ORDER_EXCEEDS_POSITION_TARGET';
+// Now defined once in simExecution.ts alongside MIN_SIM_ENTRY_USD, since all
+// four bots raise it. Re-exported so existing importers keep working.
+export { MIN_ORDER_EXCEEDS_POSITION_TARGET };
+
+/**
+ * The scale-in shape this equity can actually express, given that NO LOT MAY
+ * BE SMALLER THAN `minLotUsd`.
+ *
+ * This bot is the only one of the four with scale-in, and that made it the only
+ * one that could never trade at small equity: the first lot is 50% of the 10%
+ * target, so at $1,000 equity it asked for $50 against a $100 floor and every
+ * signal — including a 93%-confidence one — was dropped by a silent `continue`.
+ * The other three bots size a single $100 lot and were unaffected, which is why
+ * only this bot sat at zero positions.
+ *
+ * MIN_ORDER stays a CONSTRAINT, not a sizing input: the 10% target is never
+ * inflated to clear the floor. What adapts is how the target is SPLIT — the
+ * fractions are merged forward until each surviving lot clears the floor, so
+ * the returned fractions always sum to exactly 1 (the full target, never more).
+ *
+ *   target $2,000 → [0.5, 0.3, 0.2]  (unchanged: 1000/600/400 all clear $100)
+ *   target   $250 → [0.5, 0.5]       (125/125 — the 0.3 lot would be $75)
+ *   target   $100 → [1]              (one $100 lot, no scale-in)
+ *   target    $80 → []               (below the floor entirely — skip, correctly)
+ *
+ * Exported for the tests; pure, no side effects.
+ */
+export function resolveScaleFractions(
+  targetNotional: number,
+  fractions: number[],
+  minLotUsd: number = MIN_SIM_ENTRY_USD
+): number[] {
+  if (!(targetNotional >= minLotUsd)) return [];
+  const out: number[] = [];
+  let carry = 0;
+  for (const f of fractions) {
+    if (!(f > 0)) continue;
+    carry += f;
+    if (targetNotional * carry >= minLotUsd) {
+      out.push(carry);
+      carry = 0;
+    }
+  }
+  // Trailing crumbs too small to stand alone join the last lot rather than
+  // being dropped — otherwise the lots would sum to less than the target.
+  if (carry > 0) {
+    if (out.length > 0) out[out.length - 1] += carry;
+    else out.push(carry);
+  }
+  return out;
+}
 
 export interface TrendBreakoutCandleSet {
   h1: Candle[];
@@ -169,6 +227,9 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     ctx.pending.filter((o) => o.positionId).map((o) => o.positionId as string)
   );
 
+  const blockEntry = (ev: SignalEvaluation, code: string, message: string) =>
+    blockEntryShared(ev, code, message, '[bybit-sim]');
+
   // ── Exits (spec §13) — per logical trade; closes every lot together ──────
   const closingBaseSides = new Set<string>();
   for (const lt of trades) {
@@ -265,6 +326,7 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     confidence: number;
     reason: string;
     scaleLabel: string;
+    onBlocked?: (code: string, message: string) => void;
   }): number => {
     const isLong = opts.side === 'LONG';
     const assetUsed = exposureByBase.get(opts.base) ?? 0;
@@ -273,7 +335,23 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     const notional = Math.min(opts.desiredNotional, assetHeadroom, totalHeadroom, workingCash);
 
     // MIN_ORDER is a constraint, not a sizing input. Skip when target < floor.
-    if (notional < MIN_SIM_ENTRY_USD) return 0;
+    // Name the constraint that actually bound: "blocked" with no cause is the
+    // state this bot sat in for a whole run.
+    if (notional < MIN_SIM_ENTRY_USD) {
+      const binding =
+        assetHeadroom <= totalHeadroom && assetHeadroom <= workingCash && assetHeadroom < opts.desiredNotional
+          ? `תקרת חשיפה לנכס (${PER_ASSET_EXPOSURE_CAP_PERCENT}%) — נותרו $${assetHeadroom.toFixed(2)}`
+          : totalHeadroom <= workingCash && totalHeadroom < opts.desiredNotional
+            ? `תקרת חשיפה כוללת (${MAX_TOTAL_EXPOSURE_PERCENT}%) — נותרו $${totalHeadroom.toFixed(2)}`
+            : workingCash < opts.desiredNotional
+              ? `מזומן פנוי $${workingCash.toFixed(2)}`
+              : `גודל הלוט המבוקש $${opts.desiredNotional.toFixed(2)}`;
+      opts.onBlocked?.(
+        MIN_ORDER_EXCEEDS_POSITION_TARGET,
+        `${binding} < מינימום הזמנה $${MIN_SIM_ENTRY_USD}`
+      );
+      return 0;
+    }
 
     exposureByBase.set(opts.base, assetUsed + notional);
     totalExposure += notional;
@@ -306,7 +384,12 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     if (closingBaseSides.has(key)) continue;
     if (pendingEntryKeys.has(key)) continue; // a lot is already queued
     const lotCount = lt.lots.length;
-    if (lotCount >= p.scaleFractions.length) continue;
+    // The shape this equity can express (no lot below the $100 floor), not the
+    // nominal 5/3/2 — at small equity the whole target is one lot and there is
+    // nothing left to scale into.
+    const targetNotional = ctx.equity * p.positionTargetPct;
+    const scaleFractions = resolveScaleFractions(targetNotional, p.scaleFractions);
+    if (lotCount >= scaleFractions.length) continue;
 
     const set = ctx.candlesBySymbol[lt.base];
     const stNow = currentH1Supertrend(set, p);
@@ -322,14 +405,23 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     const nextScaleMinR = lotCount === 1 ? p.scale2MinR : p.scale3MinR;
     if (progressR < nextScaleMinR) continue;
 
-    const fraction = p.scaleFractions[lotCount] ?? 0;
+    const fraction = scaleFractions[lotCount] ?? 0;
     if (!(fraction > 0)) continue;
 
-     // Position sizing: target notional = 10% of equity, independent of SL.
-     // Scale-in lots are fractions of that target notional. The total logical
-     // trade never exceeds 10% equity: 5% + 3% + 2% = 10%.
-     const targetNotional = ctx.equity * p.positionTargetPct;
-     const desiredNotional = targetNotional * fraction;
+    // Position sizing: target notional = 10% of equity, independent of SL.
+    // Scale-in lots are fractions of that target notional. The total logical
+    // trade never exceeds 10% equity: 5% + 3% + 2% = 10%.
+    //
+    // The headroom cap is what actually enforces that ceiling, and it holds
+    // even when the entry collapsed the scale plan into a single full-size lot
+    // (small equity) or when equity has grown since the entry: what is already
+    // committed to this logical trade can never be topped up past the target.
+    const committed = lt.lots.reduce(
+      (sum, l) => sum + (l.avgPrice || l.entryPrice) * l.quantity,
+      0
+    );
+    const headroom = Math.max(0, targetNotional - committed);
+    const desiredNotional = Math.min(targetNotional * fraction, headroom);
 
     if (!(desiredNotional > 0)) continue;
 
@@ -353,25 +445,49 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
 
   for (const ev of ranked) {
     const plan = readTrendBreakoutPlan(ev);
-    if (!plan) continue;
+    if (!plan) {
+      blockEntry(ev, 'NO_PLAN', 'הערכה ללא תוכנית TrendBreakout (SL/TP חסרים)');
+      continue;
+    }
     const side = plan.direction;
     const key = tradeKey(ev.symbol, side);
     if (openLogicalKeys.has(key) || pendingEntryKeys.has(key)) continue; // one logical trade per base+side; blocks double-entry on the same breakout
     if (closingBaseSides.has(key)) continue;
-    if (isInEntryCooldown(ctx.exitCooldown[ev.symbol], now)) continue;
-    if (isInStreakCooldown(streakCooldownFromHistory(ctx.closedTradeMetrics ?? [], ctx.equity, ev.symbol))) continue;
-    if (logicalTradeCount >= ctx.maxConcurrentTrades) continue;
+    if (isInEntryCooldown(ctx.exitCooldown[ev.symbol], now)) {
+      blockEntry(ev, 'ENTRY_COOLDOWN', 'צינון אחרי יציאה קודמת בנכס הזה');
+      continue;
+    }
+    if (isInStreakCooldown(streakCooldownFromHistory(ctx.closedTradeMetrics ?? [], ctx.equity, ev.symbol))) {
+      blockEntry(ev, 'STREAK_COOLDOWN', 'צינון אחרי רצף הפסדים');
+      continue;
+    }
+    if (logicalTradeCount >= ctx.maxConcurrentTrades) {
+      blockEntry(ev, 'MAX_CONCURRENT', `${logicalTradeCount}/${ctx.maxConcurrentTrades} עסקאות פתוחות — אין מקום`);
+      continue;
+    }
 
     const price = plan.entryRef || ev.price;
 
     // Position sizing: 10% of equity, independent of stop-loss distance.
     // SL is used only to measure the resulting dollar risk.
+    //
+    // The first lot is the first fraction the CURRENT equity can express with
+    // no lot under the $100 floor — [0.5,0.3,0.2] at $2,000+ target, a single
+    // [1] lot at a $100 target. Sizing the first lot at a flat 0.5 made this
+    // bot unable to open anything at all below $2,000 equity, silently.
     const targetNotional = ctx.equity * p.positionTargetPct;
-    const desiredNotional = targetNotional * (p.scaleFractions[0] ?? 1);
+    const scaleFractions = resolveScaleFractions(targetNotional, p.scaleFractions);
 
-    if (desiredNotional < MIN_SIM_ENTRY_USD) {
-      continue; // MIN_ORDER_EXCEEDS_POSITION_TARGET — skip silently
+    if (scaleFractions.length === 0) {
+      blockEntry(
+        ev,
+        MIN_ORDER_EXCEEDS_POSITION_TARGET,
+        `יעד הפוזיציה $${targetNotional.toFixed(2)} (${(p.positionTargetPct * 100).toFixed(0)}% מההון) < מינימום הזמנה $${MIN_SIM_ENTRY_USD}`
+      );
+      continue;
     }
+
+    const desiredNotional = targetNotional * scaleFractions[0];
 
     const committed = placeLot({
       base: ev.symbol,
@@ -382,7 +498,8 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       takeProfit: plan.takeProfit,
       confidence: ev.confidence,
       reason: `כניסה ראשונית · SL ${plan.stopLoss.toFixed(6)} TP ${plan.takeProfit.toFixed(6)}`,
-      scaleLabel: `scale 1/${p.scaleFractions.length}`
+      scaleLabel: `scale 1/${scaleFractions.length}`,
+      onBlocked: (code, message) => blockEntry(ev, code, message)
     });
     if (committed > 0) {
       logicalTradeCount++;

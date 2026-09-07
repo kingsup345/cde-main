@@ -34,7 +34,7 @@ import { PER_ASSET_EXPOSURE_CAP_PERCENT, POSITION_TARGET_PCT } from './intradayP
 import type { Candle } from './tradeEngine';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import type { SimPosition, PendingOrder } from './simExecution';
-import { MIN_SIM_ENTRY_USD } from './simExecution';
+import { MIN_SIM_ENTRY_USD, MIN_ORDER_EXCEEDS_POSITION_TARGET, blockEntry } from './simExecution';
 
 export const uid = (p: string) => `pro-${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -300,7 +300,18 @@ export function generateProOrders(ctx: ProOrderGenContext): PendingOrder[] {
   for (const ev of evaluations) {
     if (!ev.willExecute || ev.action !== 'buy' || !ev.price) continue;
     const budget = ev.budgetUsd ?? 0; // §4 gate 7, allocated in the gate pass
-    if (budget < MIN_SIM_ENTRY_USD) continue;
+    // Was a bare `continue` — the same blindness that hid Bybit's zero-entry
+    // run. The §4 gate pass already approved this evaluation, so a refusal here
+    // is exactly the case an operator needs to see.
+    if (budget < MIN_SIM_ENTRY_USD) {
+      blockEntry(
+        ev,
+        MIN_ORDER_EXCEEDS_POSITION_TARGET,
+        `הקצאת §4 היא $${budget.toFixed(2)} < מינימום הזמנה $${MIN_SIM_ENTRY_USD}`,
+        '[pro-sim]'
+      );
+      continue;
+    }
     if (positions.some((p) => p.symbol === ev.symbol)) continue;
     if (newOrders.some((o) => o.symbol === ev.symbol) || pending.some((o) => o.symbol === ev.symbol)) continue;
 
