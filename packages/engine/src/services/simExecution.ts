@@ -618,9 +618,21 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
     if (totalPositionCount >= maxPositions) continue;
     if (ev.tradeType === 'FUTURES' && futuresPositionCount >= maxFuturesPositions) continue;
 
-    const orderSide = ev.tradeType === 'FUTURES'
+    // SPOT is long-only here (short-selling spot is unsupported). A SPOT
+    // evaluation whose tradeSide is not 'BUY' is a converter bug, and the old
+    // `: 'sell'` fallback turned it into an order fillDueOrders silently
+    // no-ops — it treats only buy/long/short as entries — so the signal
+    // vanished instead of failing. Refuse it loudly instead of inventing a
+    // spot short. See resolveTradeSide in intradayBridge.ts.
+    if (ev.tradeType === 'SPOT' && ev.tradeSide !== 'BUY') {
+      console.warn(
+        `[sim] ${ev.symbol}: SPOT evaluation carries tradeSide="${ev.tradeSide}", expected "BUY" — entry skipped.`
+      );
+      continue;
+    }
+    const orderSide: PendingOrder['side'] = ev.tradeType === 'FUTURES'
       ? (ev.tradeSide === 'LONG' ? 'long' : 'short')
-      : (ev.tradeSide === 'BUY' ? 'buy' : 'sell');
+      : 'buy';
 
     // Adaptive sizing (DecisionEngine path): the decision's risk plan carries
     // the multiplier computed from recent closed-trade performance (clamped to

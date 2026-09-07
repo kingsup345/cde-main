@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateProOrders, generateNewOrders, fillDueOrders, applyProEntryGates, type ProGateContext } from '@cde/engine/execution';
-import { Candle } from '@cde/engine';
+import { Candle, resolveTradeSide } from '@cde/engine';
 import type { SimPosition, PendingOrder } from '@cde/engine/execution';
 import type { SignalEvaluation } from '@cde/engine';
 
@@ -254,5 +254,46 @@ describe('sizing respects the batch: §4 gate 7 allocates against projected cash
     const la = gated.find((e) => e.symbol === 'LA');
     expect(la?.status).toBe('NO_SIGNAL [BELOW_THRESHOLD]');
     expect(la?.willExecute).toBe(false);
+  });
+});
+
+// A SPOT LONG signal must reach the order generator as tradeSide 'BUY'. When a
+// converter emitted 'LONG' instead, generateNewOrders' old `: 'sell'` fallback
+// built a SELL order against a position that did not exist; fillDueOrders only
+// treats buy/long/short as entries, so it silently no-opped and the bot showed
+// "SIGNAL SPOT LONG" forever without ever opening. That bug was fixed in
+// intradayBridge and useSimulationBot but NOT in server/simEngine.ts — three
+// hand-written copies of one mapping. resolveTradeSide is now the only copy.
+describe('SPOT LONG reaches the order generator as a BUY', () => {
+  it('resolveTradeSide maps SPOT LONG to BUY, futures to LONG/SHORT', () => {
+    expect(resolveTradeSide('SPOT', 'LONG')).toBe('BUY');
+    expect(resolveTradeSide('SPOT', 'SHORT')).toBe('NONE');
+    expect(resolveTradeSide('FUTURES', 'LONG')).toBe('LONG');
+    expect(resolveTradeSide('FUTURES', 'SHORT')).toBe('SHORT');
+    expect(resolveTradeSide('HOLD', 'NONE')).toBe('NONE');
+  });
+
+  it('queues a buy order for a SPOT BUY evaluation', () => {
+    const orders = generateNewOrders({
+      ...baseCtx,
+      positions: [],
+      evaluations: [{ ...evaluation('LA'), tradeType: 'SPOT', tradeSide: 'BUY' }],
+      buildCandlesForSymbol: (s: string) => candlesBySymbol[s] ?? [],
+      computeAtr5: () => 1
+    });
+    expect(orders.map((o) => o.side)).toEqual(['buy']);
+  });
+
+  it('refuses a SPOT evaluation mislabelled LONG instead of inventing a spot short', () => {
+    const orders = generateNewOrders({
+      ...baseCtx,
+      positions: [],
+      evaluations: [{ ...evaluation('LA'), tradeType: 'SPOT', tradeSide: 'LONG' }],
+      buildCandlesForSymbol: (s: string) => candlesBySymbol[s] ?? [],
+      computeAtr5: () => 1
+    });
+    // Never a phantom 'sell' — and never a position opened on a bad label.
+    expect(orders.filter((o) => o.side === 'sell')).toHaveLength(0);
+    expect(orders).toHaveLength(0);
   });
 });

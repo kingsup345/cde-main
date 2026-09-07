@@ -78,6 +78,7 @@ export type { DecisionFactor, SignalEvaluation, PortfolioInput, EvaluateUniverse
 export {
   buildPortfolioRiskStats,
   mapDecisionToSignalEvaluation,
+  resolveTradeSide,
   evaluateSymbolFromSnapshot,
   evaluateUniverse,
   fetchSymbolSnapshot,

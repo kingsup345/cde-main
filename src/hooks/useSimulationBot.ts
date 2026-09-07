@@ -23,7 +23,7 @@ import {
   SimBotConfig
 } from '@cde/engine/execution';
 import type { ClosedTradeRecord } from '@cde/engine/execution';
-import { DecisionEngine, IntradayAdapter } from '@cde/engine';
+import { DecisionEngine, IntradayAdapter, resolveTradeSide } from '@cde/engine';
 import type { DecisionResult, DecisionContext } from '@cde/engine';
 import { SIM_MIN_CONFIDENCE } from '@cde/engine/execution';
 
@@ -34,9 +34,9 @@ export type { SimPosition, SimTrade, SimPoint, PendingOrder, SimBotConfig } from
 // with generateNewOrders and UI components.
 function toSignalEvaluation(result: DecisionResult, currentPrice: number, priceChange24h: number): SignalEvaluation {
   const action = result.direction === 'LONG' ? 'buy' : result.direction === 'SHORT' ? 'sell' : 'hold';
-  const tradeSide = result.tradeType === 'SPOT'
-    ? (result.direction === 'LONG' ? 'BUY' : 'NONE')
-    : result.direction === 'LONG' ? 'LONG' : result.direction === 'SHORT' ? 'SHORT' : 'NONE';
+  // Single definition — see intradayBridge.resolveTradeSide for why SPOT must
+  // report 'BUY' and never 'LONG'.
+  const tradeSide = resolveTradeSide(result.tradeType as 'SPOT' | 'FUTURES' | 'HOLD', result.direction);
   const isSignal = result.outcome === 'SIGNAL';
 
   // Extract layer data from raw engine output

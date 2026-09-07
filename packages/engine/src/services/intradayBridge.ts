@@ -176,6 +176,35 @@ function mapRegimeToMarketRegimeResult(r: Regime1H): MarketRegimeResult {
   };
 }
 
+/**
+ * tradeType + direction → SignalEvaluation.tradeSide. THE single definition —
+ * every converter that builds a SignalEvaluation for the intraday engine must
+ * call this (intradayBridge, server/simEngine.ts, useSimulationBot.ts).
+ *
+ * SPOT only ever goes long here (short-selling spot is unsupported — see the
+ * explicit "Spot SELL disabled" guard in tradingWorker.ts's executeOrder), so a
+ * SPOT signal must report tradeSide as 'BUY', never 'LONG'. Checking
+ * `direction === 'LONG'` FIRST shadowed that for every SPOT LONG signal,
+ * producing tradeSide='LONG' — which then failed the `=== 'BUY'` checks
+ * downstream (order-side derivation in the simulation engines, and the
+ * "already held" SPOT dedupe guard), so every SPOT LONG entry was queued as a
+ * SELL order against a position that did not exist yet, silently no-opped on
+ * fill (fillDueOrders only treats buy/long/short as entries), and never opened.
+ *
+ * That bug was fixed here and in useSimulationBot.ts but NOT in
+ * server/simEngine.ts's parallel DecisionEngine converter — three hand-written
+ * copies of one mapping, one of which drifted. Hence this function.
+ */
+export function resolveTradeSide(
+  tradeType: 'SPOT' | 'FUTURES' | 'HOLD',
+  direction: Direction | string
+): 'LONG' | 'SHORT' | 'BUY' | 'SELL' | 'NONE' {
+  if (tradeType === 'SPOT') return direction === 'LONG' ? 'BUY' : 'NONE';
+  if (direction === 'LONG') return 'LONG';
+  if (direction === 'SHORT') return 'SHORT';
+  return 'NONE';
+}
+
 export function mapDecisionToSignalEvaluation(
   d: IntradayDecision,
   price: number,
@@ -186,19 +215,7 @@ export function mapDecisionToSignalEvaluation(
   const direction = d.direction;
   const action: 'buy' | 'sell' | 'hold' =
     direction === 'LONG' ? 'buy' : direction === 'SHORT' ? 'sell' : 'hold';
-  // SPOT only ever goes long here (short-selling spot is unsupported — see the
-  // explicit "Spot SELL disabled" guard in tradingWorker.ts's executeOrder),
-  // so a SPOT signal must report tradeSide as 'BUY', never 'LONG'. Checking
-  // `direction === 'LONG'` FIRST (as an earlier version of this did) shadowed
-  // that for every SPOT LONG signal, producing tradeSide='LONG' — which then
-  // failed the `=== 'BUY'` checks downstream (order-side derivation in both
-  // simulation engines, and the "already held" SPOT dedupe guard), so every
-  // SPOT LONG entry was queued as a SELL order against a position that didn't
-  // exist yet, silently no-opped on fill, and stayed stuck "pending" forever.
-  const tradeSide: 'LONG' | 'SHORT' | 'BUY' | 'SELL' | 'NONE' =
-    tradeType === 'SPOT'
-      ? (direction === 'LONG' ? 'BUY' : 'NONE')
-      : direction === 'LONG' ? 'LONG' : direction === 'SHORT' ? 'SHORT' : 'NONE';
+  const tradeSide = resolveTradeSide(tradeType, direction);
   // Reflect actual progress through the gate chain, not just full SIGNAL:
   // a NO_ENTRY case that cleared Setup still has a meaningful score to show,
   // and a NO_SETUP case can at least show how close the best candidate got.

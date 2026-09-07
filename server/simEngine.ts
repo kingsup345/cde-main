@@ -14,7 +14,7 @@ import {
 } from './simEngineFactory';
 import { SIM_MIN_CONFIDENCE, SIM_INTRADAY_PARAMS_OVERRIDE } from '@cde/engine/execution';
 import { generateNewOrders } from '@cde/engine/execution';
-import { SignalEvaluation, DecisionFactor } from '@cde/engine';
+import { SignalEvaluation, DecisionFactor, resolveTradeSide } from '@cde/engine';
 import { Candle, PortfolioRiskStats } from '@cde/engine';
 import { IntradayParams, DEFAULT_INTRADAY_PARAMS } from '@cde/engine';
 
@@ -191,7 +191,12 @@ function convertToSignalEvaluation(
   const isSignal = result.outcome === 'SIGNAL';
   const tradeType = result.tradeType || 'HOLD';
   const action = result.direction === 'LONG' ? 'buy' : result.direction === 'SHORT' ? 'sell' : 'hold';
-  const tradeSide = result.direction;
+  // SPOT must report 'BUY', never 'LONG' — generateNewOrders derives the order
+  // side from this, and 'LONG' on a SPOT eval fell through to a 'sell' order
+  // that fillDueOrders silently no-ops (it only treats buy/long/short as
+  // entries). That is why SIGNAL SPOT LONG never opened a position on the
+  // server sim. Single definition lives in intradayBridge.resolveTradeSide.
+  const tradeSide = resolveTradeSide(tradeType as 'SPOT' | 'FUTURES' | 'HOLD', result.direction);
 
   const factors: DecisionFactor[] = [];
   if (result.reasoning.length > 0) {
