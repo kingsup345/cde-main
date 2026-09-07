@@ -32,7 +32,8 @@ export {
   SIM_BASE_DEFAULTS,
   SIM_MIN_CONFIDENCE,
   SIM_MAX_FUTURES_POSITIONS,
-  simBotDefaults
+  simBotDefaults,
+  riskLevelToMaxPositions
 } from './services/simDefaults';
 export type { SimBotId, SimBotSpec, ConfidenceScale, SimEnvOverrides } from './services/simDefaults';
 

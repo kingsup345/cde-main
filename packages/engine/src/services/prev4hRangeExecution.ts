@@ -53,6 +53,11 @@ export interface Prev4hRangeOrderGenContext {
   /** SHORTs are simulated as 1x FUTURES; this caps how many can be open at
    *  once (SIM_MAX_FUTURES_POSITIONS.path). LONGs are SPOT and unaffected. */
   maxFuturesPositions: number;
+  /** SimBotConfig.proLimitEntries. true → the breakout entry rests as a LIMIT
+   *  at the signal price (fills on a pullback back to it, else expires); false
+   *  → fires as a delayed MARKET order with adverse slippage (the default —
+   *  breakout strategies normally want the fill now). */
+  limitEntries?: boolean;
   params?: Partial<Prev4hRangeParams>;
 }
 
@@ -200,9 +205,10 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
       quantity: notional / price,
       budgetUsd: notional,
       leverage: 1,
-      // Fire at the delayed market price — this is a breakout entry, not a
-      // resting discount limit.
-      fill: 'market',
+      // Default MARKET: a breakout entry normally wants the fill now. LIMIT
+      // (proLimitEntries on) rests at the signal price — fills only if price
+      // pulls back to it (a retest), else expires.
+      fill: ctx.limitEntries ? 'limit' : 'market',
       stopLoss: plan.stopLoss,
       takeProfit: plan.takeProfit,
       takeProfit1: plan.takeProfit,

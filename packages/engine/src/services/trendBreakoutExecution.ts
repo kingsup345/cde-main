@@ -69,6 +69,11 @@ export interface TrendBreakoutOrderGenContext {
   closedTradeMetrics?: ClosedTradeRecord[];
   /** Max concurrent LOGICAL trades (base+side groups), not lots. */
   maxConcurrentTrades: number;
+  /** SimBotConfig.proLimitEntries. true → every lot (fresh + scale-in) rests as
+   *  a LIMIT at the signal price (fills on a pullback back to it, else expires);
+   *  false → delayed MARKET fill with adverse slippage (the default — a
+   *  breakout normally wants the fill now). */
+  limitEntries?: boolean;
   params?: Partial<TrendBreakoutParams>;
 }
 
@@ -283,7 +288,7 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       quantity: notional / opts.price,
       budgetUsd: notional,
       leverage: 1,
-      fill: 'market',
+      fill: ctx.limitEntries ? 'limit' : 'market',
       stopLoss: opts.stopLoss,
       takeProfit: opts.takeProfit,
       takeProfit1: opts.takeProfit,

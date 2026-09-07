@@ -359,13 +359,15 @@ export default function SimulationEngineColumn({
             </DialogHeader>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="text-sm text-muted-foreground mb-2 block">פרופיל סיכון</label>
+                <label className="text-sm text-muted-foreground mb-2 block">
+                  פרופיל סיכון — קובע כמה פוזיציות מקבילות (כל פוזיציה 10% מההון)
+                </label>
                 <Select value={botConfig.riskLevel} onValueChange={(value) => setBotConfig({ ...botConfig, riskLevel: value as SimBotConfig['riskLevel'] })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="low">נמוך (שמרני)</SelectItem>
-                    <SelectItem value="medium">בינוני (מאוזן)</SelectItem>
-                    <SelectItem value="high">גבוה (אגרסיבי)</SelectItem>
+                    <SelectItem value="low">נמוך (שמרני) — עד 3 פוזיציות</SelectItem>
+                    <SelectItem value="medium">בינוני (מאוזן) — עד 5 פוזיציות</SelectItem>
+                    <SelectItem value="high">גבוה (אגרסיבי) — עד 7 פוזיציות</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -405,7 +407,8 @@ export default function SimulationEngineColumn({
                   onChange={(e) => setBotConfig({ ...botConfig, proLimitEntries: e.target.checked })}
                 />
                 <label htmlFor={`${title}-limit-entries`} className="text-sm text-muted-foreground cursor-pointer">
-                  כניסה לפי שער (לימיט) — הבוט ממתין שהשוק יגיע למחיר האות ורק אז קונה
+                  כניסה לפי שער (לימיט) — מסומן: הבוט ממתין שהשוק יגיע למחיר האות ורק אז קונה.
+                  לא מסומן: כניסת MARKET מיידית במחיר החי. חל על כל 4 הבוטים.
                 </label>
               </div>
             </div>

@@ -146,7 +146,7 @@ curl https://<your-worker>.onrender.com/api/public/backtest-archive
 ### 3.2 משתני סביבה (Site settings → Environment variables)
 | משתנה | ערך | הערה |
 |---|---|---|
-| `VITE_TRADING_API_URL` | `https://<your-worker>.onrender.com` | ⚠️ **build-time** — נצרב ל-bundle. שינוי דורש **rebuild** (Deploys → Trigger deploy → Clear cache and deploy). |
+| `VITE_TRADING_API_URL` | `https://<your-worker>.onrender.com` (כרגע: `https://cde-main.onrender.com`) | ⚠️ **build-time** — נצרב ל-bundle. שינוי דורש **rebuild** (Deploys → Trigger deploy → Clear cache and deploy). |
 | `VITE_ENABLE_ANALYTICS` | `true` / `false` | אופציונלי |
 
 > המשתמש יכול גם לעקוף את ה-URL בזמן ריצה מדף בוט הסימולציה ("Worker URL" → נשמר ב-localStorage). זה נועד לבדיקות; ה-`VITE_TRADING_API_URL` הוא ברירת המחדל.

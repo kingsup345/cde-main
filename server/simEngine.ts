@@ -167,6 +167,7 @@ const intradayStrategy: SimEngineStrategy = {
       equity: input.equity,
       positionPercent: input.config.positionPercent,
       riskLevel: input.config.riskLevel,
+      limitEntries: input.config.proLimitEntries === true,
       exitCooldown: input.exitCooldown,
       priceFor: input.priceFor,
       buildCandlesForSymbol: input.buildCandlesForSymbol,

@@ -18,8 +18,8 @@
 # `server`, they must become `npm install && npm run build` and
 # `node dist/worker.js` — and auto-deploy on engine changes is lost.
 #
-# Separately: the live hostname (crypto-decision-engine-main-hev8.onrender.com)
-# is derived from the REPO name, not from `name` below, so this service was
+# Separately: the live hostname (cde-main.onrender.com) is derived from the
+# Render service name, not from `name` below, so this service was
 # created by hand rather than from this blueprint. Do NOT "tidy" the name to
 # match: Render identifies a blueprint-managed service BY that name, so
 # renaming one that IS managed here makes Render treat it as new, orphaning the

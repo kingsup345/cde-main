@@ -148,17 +148,40 @@ describe('every open lot is checked against its own stop in the same tick', () =
   });
 });
 
-describe('intraday rests its entry at the maker discount, not the live price', () => {
-  // Regression: the real bot places a genuine resting LIMIT order at
-  // entry.entryPrice (confirmEntry5M's small discount below market —
-  // intradayEntry.ts; tradingWorker.ts:876 uses it for the actual exchange
-  // order). Both simulations instead handed the order generator `ev.price`
-  // (the live price, for the panel) as the order's own resting level — so a
-  // LONG could only fill once price fell back to or BELOW where it was at
-  // signal time: the reversal that invalidates a momentum/pullback setup,
-  // not the continuation it was taken for. optimalEntryPrice is the field
-  // that carries the intended resting level through to the order.
-  it('rests the order at optimalEntryPrice, not at the live display price', () => {
+describe('intraday entry mode follows proLimitEntries (limitEntries)', () => {
+  // limitEntries ON  → resting LIMIT at confirmEntry5M's maker discount
+  //                    (optimalEntryPrice), fill: 'limit'. Mirrors the real bot.
+  // limitEntries OFF → delayed MARKET at the live price, fill: 'market'.
+  it('LIMIT on: rests at optimalEntryPrice with fill:limit, sized off that level', () => {
+    const ev = { ...evaluation('LA'), price: 100, optimalEntryPrice: 98.5 };
+    const orders = generateNewOrders({
+      ...baseCtx,
+      limitEntries: true,
+      positions: [],
+      evaluations: [ev],
+      buildCandlesForSymbol: (s: string) => candlesBySymbol[s] ?? [],
+      computeAtr5: () => 1
+    });
+    const buy = orders.find((o) => o.side === 'buy');
+    expect(buy?.signalPrice).toBe(98.5);
+    expect(buy?.fill).toBe('limit');
+    expect(buy?.quantity).toBeCloseTo((buy!.budgetUsd ?? 0) / 98.5, 6);
+  });
+
+  it('LIMIT on but no discount computed: rests at the live price', () => {
+    const ev = { ...evaluation('LA'), price: 100, optimalEntryPrice: undefined };
+    const orders = generateNewOrders({
+      ...baseCtx,
+      limitEntries: true,
+      positions: [],
+      evaluations: [ev],
+      buildCandlesForSymbol: (s: string) => candlesBySymbol[s] ?? [],
+      computeAtr5: () => 1
+    });
+    expect(orders.find((o) => o.side === 'buy')?.signalPrice).toBe(100);
+  });
+
+  it('LIMIT off (default): fires MARKET at the live price, ignoring the discount', () => {
     const ev = { ...evaluation('LA'), price: 100, optimalEntryPrice: 98.5 };
     const orders = generateNewOrders({
       ...baseCtx,
@@ -168,22 +191,9 @@ describe('intraday rests its entry at the maker discount, not the live price', (
       computeAtr5: () => 1
     });
     const buy = orders.find((o) => o.side === 'buy');
-    expect(buy?.signalPrice).toBe(98.5);
-    // Sized off the level it will actually fill at, not the live price —
-    // otherwise budgetUsd and quantity*fillPrice disagree.
-    expect(buy?.quantity).toBeCloseTo((buy!.budgetUsd ?? 0) / 98.5, 6);
-  });
-
-  it('falls back to the live price when the engine computed no discount', () => {
-    const ev = { ...evaluation('LA'), price: 100, optimalEntryPrice: undefined };
-    const orders = generateNewOrders({
-      ...baseCtx,
-      positions: [],
-      evaluations: [ev],
-      buildCandlesForSymbol: (s: string) => candlesBySymbol[s] ?? [],
-      computeAtr5: () => 1
-    });
-    expect(orders.find((o) => o.side === 'buy')?.signalPrice).toBe(100);
+    expect(buy?.signalPrice).toBe(100);
+    expect(buy?.fill).toBe('market');
+    expect(buy?.quantity).toBeCloseTo((buy!.budgetUsd ?? 0) / 100, 6);
   });
 });
 

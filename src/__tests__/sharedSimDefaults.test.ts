@@ -6,6 +6,7 @@ import {
   SIM_MIN_CONFIDENCE,
   SIM_MAX_FUTURES_POSITIONS,
   simBotDefaults,
+  riskLevelToMaxPositions,
   validateExposureModel,
   POSITION_TARGET_PCT,
   MAX_TOTAL_EXPOSURE_PERCENT,
@@ -54,20 +55,27 @@ describe('shared sim defaults', () => {
     expect(SIM_MAX_FUTURES_POSITIONS.path).toBe(2);
   });
 
-  it('lets each sim bot hold up to 7 positions, within the exposure model', () => {
-    // Operator decision (2026-09-07): 7 concurrent positions of 10% equity each.
-    // The live bot is NOT bound to this — it keeps its own 2 via
-    // SIM_INTRADAY_PARAMS_OVERRIDE.maxOpenPositions.
-    expect(SIM_BASE_DEFAULTS.maxPositions).toBe(7);
-    // …and that must not exceed the total-exposure ceiling, or the sim engines
-    // throw EXPOSURE_MODEL_INVALID on every tick.
-    expect(SIM_BASE_DEFAULTS.maxPositions * POSITION_TARGET_PCT)
-      .toBeLessThanOrEqual(MAX_TOTAL_EXPOSURE_PERCENT / 100);
-    expect(() => validateExposureModel({
-      maxPositions: SIM_BASE_DEFAULTS.maxPositions,
-      positionTargetPct: POSITION_TARGET_PCT,
-      totalExposureCapPct: MAX_TOTAL_EXPOSURE_PERCENT / 100
-    })).not.toThrow();
+  it('maps the risk profile to a position count, all within the exposure model', () => {
+    // Operator decision (2026-09-07): the risk profile controls COUNT, not size.
+    // Each position stays 10% of equity; low 3 / medium 5 / high 7.
+    expect(riskLevelToMaxPositions('low')).toBe(3);
+    expect(riskLevelToMaxPositions('medium')).toBe(5);
+    expect(riskLevelToMaxPositions('high')).toBe(7);
+    expect(riskLevelToMaxPositions(undefined)).toBe(5);
+    // simBotDefaults wires it in; medium is the shipped default.
+    expect(simBotDefaults('intraday').maxPositions).toBe(5);
+    expect(SIM_BASE_DEFAULTS.maxPositions).toBe(5);
+    // Every level must stay under the total-exposure ceiling, or the sim
+    // engines throw EXPOSURE_MODEL_INVALID on every tick.
+    for (const lvl of ['low', 'medium', 'high'] as const) {
+      expect(riskLevelToMaxPositions(lvl) * POSITION_TARGET_PCT)
+        .toBeLessThanOrEqual(MAX_TOTAL_EXPOSURE_PERCENT / 100);
+      expect(() => validateExposureModel({
+        maxPositions: riskLevelToMaxPositions(lvl),
+        positionTargetPct: POSITION_TARGET_PCT,
+        totalExposureCapPct: MAX_TOTAL_EXPOSURE_PERCENT / 100
+      })).not.toThrow();
+    }
   });
 
   it('returns a fresh object each call — a shared default must not be mutable state', () => {

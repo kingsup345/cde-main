@@ -28,6 +28,7 @@
  */
 
 import type { SimBotConfig } from './simExecution';
+import { POSITION_TARGET_PCT, MAX_TOTAL_EXPOSURE_PERCENT } from './intradayParams';
 
 export type SimBotId = 'intraday' | 'pro' | 'path' | 'bybit';
 
@@ -178,10 +179,11 @@ export const SIM_MAX_FUTURES_POSITIONS: Record<SimBotId, number> = {
 /**
  * Everything the bots hold in common.
  *
- * `maxPositions` is 7 — an operator decision (2026-09-07): each sim bot may hold
- * up to 7 concurrent positions of 10% equity each, i.e. up to 70% invested.
- * `MAX_TOTAL_EXPOSURE_PERCENT` is 80 so `validateExposureModel` accepts this
- * (7 × 10% = 70% ≤ 80%) and still leaves a ~20% cash buffer.
+ * `maxPositions` is derived from the RISK PROFILE, not stored here — see
+ * `riskLevelToMaxPositions` (low 3 / medium 5 / high 7). This value is the
+ * medium default and is used only as a last-resort fallback where a config's
+ * own `maxPositions` is somehow missing. Each position is still 10% of equity;
+ * the profile changes COUNT, never SIZE (§12).
  *
  * `positionPercent` is 10, matching the live bot. Pro does not actually read
  * it: alg.md §3/§6 size Pro's entries from risk-level allocation
@@ -191,7 +193,7 @@ export const SIM_MAX_FUTURES_POSITIONS: Record<SimBotId, number> = {
 export const SIM_BASE_DEFAULTS = {
   riskLevel: 'medium' as const,
   initialAmount: 10000,
-  maxPositions: 7, // 7 × 10% = 70% ≤ 80% totalExposureCap — validated invariant
+  maxPositions: 5, // = riskLevelToMaxPositions('medium'); real value is per-config
   feePercent: 0.1,
   slippagePercent: 0.05,
   executionDelaySec: 3,
@@ -229,6 +231,22 @@ export interface SimEnvOverrides {
  * `BOT_PATH_MIN_CONFIDENCE`: one knob per meaning, rather than one knob
  * straddling two.
  */
+/**
+ * Risk profile → number of concurrent positions a sim bot may hold. Each
+ * position is still POSITION_TARGET_PCT (10%) of equity — the profile changes
+ * COUNT, never SIZE (§12 forbids anything downstream reshaping the 10% target).
+ *
+ * low 3 (30% max invested) · medium 5 (50%) · high 7 (70%) — all within the
+ * 80% MAX_TOTAL_EXPOSURE_PERCENT ceiling, so validateExposureModel always
+ * passes. Clamped defensively in case the constants ever change.
+ */
+export function riskLevelToMaxPositions(riskLevel: 'low' | 'medium' | 'high' | undefined): number {
+  const byLevel = { low: 3, medium: 5, high: 7 } as const;
+  const raw = byLevel[riskLevel ?? 'medium'];
+  const cap = Math.floor(MAX_TOTAL_EXPOSURE_PERCENT / (POSITION_TARGET_PCT * 100));
+  return Math.min(raw, cap);
+}
+
 export function simBotDefaults(id: SimBotId, env: SimEnvOverrides = {}): SimBotConfig {
   const spec = SIM_BOTS[id];
 
@@ -240,10 +258,16 @@ export function simBotDefaults(id: SimBotId, env: SimEnvOverrides = {}): SimBotC
       ? (env.pathMinConfidence ?? spec.minConfidence)
       : (env.minConfidence ?? spec.minConfidence);
 
+  const riskLevel = env.riskLevel ?? SIM_BASE_DEFAULTS.riskLevel;
+
   return {
     ...SIM_BASE_DEFAULTS,
-    riskLevel: env.riskLevel ?? SIM_BASE_DEFAULTS.riskLevel,
-    maxPositions: env.maxPositions ?? SIM_BASE_DEFAULTS.maxPositions,
+    riskLevel,
+    // Position COUNT is derived from the risk profile, not from BOT_MAX_OPEN_
+    // POSITIONS (that stays the LIVE bot's knob). Keep this field in sync so the
+    // panel's "positions X/Y" shows the right ceiling; the worker re-derives it
+    // whenever riskLevel changes.
+    maxPositions: riskLevelToMaxPositions(riskLevel),
     positionPercent: env.positionPercent ?? SIM_BASE_DEFAULTS.positionPercent,
     maxFuturesPositions: spec.maxFuturesPositions,
     minConfidenceOverride

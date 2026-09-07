@@ -115,12 +115,15 @@ describe('Test B — scale parity: every sim bot now reports a 0-100 signal scor
   });
 
   it('applies the non-confidence environment layer to every bot alike', () => {
+    // maxPositions is NOT taken from env — it is derived from riskLevel
+    // (riskLevelToMaxPositions: low 3 / medium 5 / high 7). BOT_MAX_OPEN_POSITIONS
+    // is the LIVE bot's knob only.
     const env = { positionPercent: 4, maxPositions: 9, riskLevel: 'high' as const };
     for (const id of SIM_BOT_IDS) {
       const config = simBotDefaults(id as SimBotId, env);
       expect(config.positionPercent).toBe(4);
-      expect(config.maxPositions).toBe(9);
       expect(config.riskLevel).toBe('high');
+      expect(config.maxPositions).toBe(7); // from riskLevel:'high', not env.maxPositions(9)
     }
   });
 

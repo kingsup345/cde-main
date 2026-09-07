@@ -104,7 +104,8 @@ const bybitStrategy: SimEngineStrategy = {
       priceFor: input.priceFor,
       candlesBySymbol,
       closedTradeMetrics: input.closedTradeMetrics,
-      maxConcurrentTrades: input.maxPositions ?? 2, // 2 × 10% = 20% = totalExposureCap
+      maxConcurrentTrades: input.maxPositions,
+      limitEntries: input.config.proLimitEntries === true,
       params
     });
   }

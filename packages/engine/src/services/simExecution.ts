@@ -234,9 +234,10 @@ export interface SimBotConfig {
   slippagePercent: number;
   executionDelaySec: number;
   minConfidenceOverride?: number;
-  /** Bot Pro only: when true, entries rest as LIMIT orders at the signal price
-   *  instead of firing as delayed MARKET fills (§6). The bot waits until the
-   *  market reaches the price and then buys — fill is Maker, no slippage. */
+  /** All 4 sim bots: when true, entries rest as LIMIT orders at the strategy's
+   *  entry-reference price (intraday: a maker discount; path/bybit: the signal
+   *  price → a pullback/retest fill) instead of firing as delayed MARKET fills.
+   *  Fill is Maker, no slippage. When false/absent → MARKET at the live price. */
   proLimitEntries?: boolean;
   positionPercent?: number;
 }
@@ -285,13 +286,16 @@ export function computeEntryBudget(
 }
 
 export interface EntryBudgetInput {
-  /** RiskPlan.betSizeUsd for this signal, when the engine produced one. */
+  /** RiskPlan.betSizeUsd for this signal, when the engine produced one — itself
+   *  10% of equity. Can only bring the size DOWN from target, never up. */
   kellyBetSizeUsd?: number;
-  /** Free cash at this point in the batch. */
+  /** Portfolio equity. The 10% target is a fraction of THIS — the single source
+   *  of truth (§1/§12), same as Pro / Path / TrendBreakout. */
+  equity: number;
+  /** Free cash at this point in the batch — a hard upper LIMIT only, never the
+   *  target. As cash depletes across a batch the target stays 10% of equity;
+   *  the trade is simply skipped once cash can no longer cover it. */
   cash: number;
-  tradeType: 'SPOT' | 'FUTURES';
-  /** SimBotConfig.positionPercent — read as a CEILING here, not as the size. */
-  positionPercent?: number;
   /** Performance-adaptive multiplier from the decision (clamped to [0,1]). */
   sizingMultiplier?: number;
 }
@@ -299,36 +303,29 @@ export interface EntryBudgetInput {
 /**
  * The size an entry order is actually sent with.
  *
- * 10% of equity is the non-negotiable target (§1/§12). The Kelly bet size from
- * the risk layer (riskPlan.notionalUsd, which is itself 10% of equity) and the
- * performance multiplier are the ONLY dials that can bring the size down from
- * that target — and they do so by clamping, never by amplifying.
+ * = 10% of EQUITY, clamped by (a) the risk layer's Kelly bet (also 10% of
+ * equity, so a no-op unless it de-risked) × the performance multiplier
+ * (∈ [0,1], only de-risks), and (b) available cash as a hard limit.
  *
- * `positionPercent` and `riskLevel` are NOT sizing inputs here. positionPercent
- * acts only as the operator ceiling inside computeEntryBudget (the $1000/$500
- * absolute caps on top), and riskLevel is a confidence-gating only input — it
- * never scales the position.
+ * NOT inputs, deliberately: `positionPercent` (was the operator ceiling inside
+ * computeEntryBudget — a $1000/$500 absolute cap that contradicted "10% of
+ * equity, always"), `riskLevel`, `tradeType`-specific ratios. Those all
+ * reshaped the target, which §12 forbids.
  */
 export function resolveEntryBudget(input: EntryBudgetInput): number {
-  // 10% of free cash is the hard ceiling — nothing exceeds this (§1/§12).
-  const target = input.cash * POSITION_TARGET_PCT;
+  const target = input.equity * POSITION_TARGET_PCT;
 
-  // Absolute dollar caps from the operator's positionPercent ceiling.
-  const ceiling = computeEntryBudget(input.cash, input.tradeType, input.positionPercent);
-
-  // Performance multiplier only de-risks (clamped to [0,1]).
   const perfMult = typeof input.sizingMultiplier === 'number' && Number.isFinite(input.sizingMultiplier)
     ? Math.max(0, Math.min(1, input.sizingMultiplier))
     : 1;
 
   const kelly = input.kellyBetSizeUsd;
-  const kellySized = typeof kelly === 'number' && Number.isFinite(kelly) && kelly > 0
-    ? kelly * perfMult
-    : ceiling;
+  const sized = (typeof kelly === 'number' && Number.isFinite(kelly) && kelly > 0
+    ? Math.min(kelly, target)
+    : target) * perfMult;
 
-  // Target is the strategic ceiling; ceiling is the operator's cap.
-  // Both are upper bounds — neither can exceed 10% of equity.
-  return Math.min(kellySized, Math.min(ceiling, target));
+  // Cash is the only hard limit — it never reshapes the 10% target.
+  return Math.min(sized, input.cash);
 }
 
 /** Multiplier applied to the entry budget for SimBotConfig.riskLevel.
@@ -433,11 +430,15 @@ export interface OrderGenContext {
   /** Portfolio equity — the denominator for the losing-streak cooldown's
    *  "was this loss big enough to be a different regime" test. */
   equity: number;
-  /** SimBotConfig.positionPercent / .riskLevel, the two sizing controls the bot
-   *  panel exposes. Omitted — by tests and by any caller with no user config
-   *  — they fall back to the engine defaults. */
+  /** SimBotConfig.positionPercent / .riskLevel — carried for telemetry only.
+   *  Sizing is 10% of equity (§12); neither field reshapes it. */
   positionPercent?: number;
   riskLevel?: 'low' | 'medium' | 'high';
+  /** SimBotConfig.proLimitEntries. When true, entries rest as LIMIT orders at
+   *  the strategy's own entry-reference price (a maker-discount for intraday);
+   *  when false/absent they fire as delayed MARKET fills with adverse slippage.
+   *  Same semantics the Pro bot's `limitEntries` already has. */
+  limitEntries?: boolean;
   /** Symbol (as stored on the position/order) → last-loss timestamp. Read-only here. */
   exitCooldown: Record<string, number>;
   priceFor: (symbol: string) => number | undefined;
@@ -631,9 +632,8 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
       : 1;
     const rawBudget = resolveEntryBudget({
       kellyBetSizeUsd: ev.betSizeUsd,
+      equity: ctx.equity,
       cash: workingCash,
-      tradeType: ev.tradeType === 'FUTURES' ? 'FUTURES' : 'SPOT',
-      positionPercent: ctx.positionPercent,
       sizingMultiplier: riskMult
     });
     // MIN_ORDER is a constraint, not a sizing input. Skip when target < floor.
@@ -666,22 +666,20 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
     if (ev.tradeType === 'FUTURES') futuresPositionCount++;
     if (correlationCandles) correlationBook.push({ symbol: toBase(ev.symbol), direction: evDirection });
 
-    // The resting order's own level: entry.entryPrice's maker discount when
-    // the engine computed one (surfaced as optimalEntryPrice — see
-    // convertToSignalEvaluation / toSignalEvaluation), else the live price.
-    // Below, fillDueOrders treats any entry order without `fill:'market'` as
-    // a genuine resting LIMIT (crossed only once price reaches this level or
-    // better) — exactly what the real bot places on the exchange
-    // (tradingWorker.ts: `orderType:'Limit', price: entry.entryPrice`).
-    // Sizing off ev.price here while resting the order at a different level
-    // would size for a fill that never happens at that price.
-    const entryPrice = ev.optimalEntryPrice ?? ev.price;
+    // LIMIT mode (proLimitEntries on): rest at entry.entryPrice's maker discount
+    // (optimalEntryPrice) — fillDueOrders only crosses it once price reaches
+    // that level or better, exactly what the real bot places on the exchange
+    // (tradingWorker.ts: `orderType:'Limit'`). MARKET mode (off): fire at the
+    // live price with adverse slippage. Sizing is off whichever price the order
+    // actually rests / fills at, so quantity matches the fill.
+    const entryPrice = ctx.limitEntries ? (ev.optimalEntryPrice ?? ev.price) : ev.price;
     newOrders.push({
       id: uid(`${ev.symbol}-${orderSide}`),
       symbol: ev.symbol,
       type: ev.tradeType as 'SPOT' | 'FUTURES',
       side: orderSide,
       signalPrice: entryPrice,
+      fill: ctx.limitEntries ? 'limit' : 'market',
       quantity: (rawBudget * (ev.leverage || 1)) / entryPrice,
       budgetUsd: rawBudget,
       leverage: ev.leverage || 1,
