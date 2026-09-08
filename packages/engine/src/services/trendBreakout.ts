@@ -93,7 +93,10 @@ export const DEFAULT_TREND_BREAKOUT_PARAMS: TrendBreakoutParams = {
   atrPeriod: 14,
   volumeMultiplier: 1.2,
   minConfidence: 70,
-  slAtrMultiplier: 1.5,
+  // Widened 1.5 → 2.8 (operator decision 2026-09-08): the stop now stretches
+  // TOWARD the shared 4.2% cap in normal volatility instead of sitting at ~1%,
+  // and stop exits confirm on the M15 close (see trendBreakoutExecution.ts).
+  slAtrMultiplier: 2.8,
   tpRMultiplier: 2.0,
   /** Deprecated: position sizing now uses positionTargetPct (10% of equity).
    *  Kept for API stability — do not use for sizing. */
@@ -174,8 +177,8 @@ export interface TrendBreakoutPlan {
   takeProfit1: number;
   /** TP2 — the shared 4.5% level the remaining half runs to. */
   takeProfit2: number;
-  /** True when 1.5×ATR would have risked more than MAX_LOSS_PERCENT and the
-   *  shared cap pulled the stop in. Telemetry for the panel. */
+  /** True when slAtrMultiplier×ATR would have risked more than MAX_LOSS_PERCENT
+   *  and the shared cap pulled the stop in. Telemetry for the panel. */
   stopCapped: boolean;
   /** Where a LIMIT entry rests when the operator has limit entries on. A
    *  discount below market (above, for a short), floored just past the broken
@@ -340,9 +343,10 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
     entryRef, isLong, p.entryLimitOffsetAtrMult * atrM5, brokeLevel, 0.02 * atrM5
   );
   // The ATR stop is this strategy's own and stays the stop whenever it risks
-  // 4.2% or less. A wide-ATR symbol whose 1.5×ATR(M15) would have risked more
-  // gets pulled in by the shared cap (operator decision 2026-09-08); the cap
-  // only ever REDUCES risk, so a tight-ATR stop is untouched.
+  // 4.2% or less. A wide-ATR symbol whose slAtrMultiplier×ATR(M15) would have
+  // risked more gets pulled in by the shared cap (operator decision
+  // 2026-09-08); the cap only ever REDUCES risk, so a tight-ATR stop is
+  // untouched.
   const rUnit = p.slAtrMultiplier * atrM15;
   const structuralStop = isLong ? entryRef - rUnit : entryRef + rUnit;
   const stopLoss = capStopLoss(entryRef, structuralStop, isLong);

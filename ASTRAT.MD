@@ -17,7 +17,7 @@ export interface TrendBreakoutParams {
   atrPeriod: number;                // 14
   volumeMultiplier: number;         // 1.2
   minConfidence: number;            // 70
-  slAtrMultiplier: number;          // 1.5
+  slAtrMultiplier: number;          // 2.8 (הורחב מ-1.5, החלטת מפעיל 2026-09-08)
   tpRMultiplier: number;            // 2.0
   riskPerTrade: number;             // 0.005 (0.5% מהקרן)
   breakEvenR: number;               // 1.0
@@ -112,7 +112,7 @@ function computeConfidence(direction, i) {
 
 ```ts
 const entryRef = currentPrice;                    // display price (M5 confirmation close)
-const rUnit = slAtrMultiplier * atrM15;           // = 1.5 × ATR(M15)
+const rUnit = slAtrMultiplier * atrM15;           // = 2.8 × ATR(M15)
 const stopLoss = isLong ? entryRef - rUnit : entryRef + rUnit;
 const takeProfit = isLong ? entryRef + rUnit * 2.0 : entryRef - rUnit * 2.0; // 2R
 const riskPerUnit = Math.abs(entryRef - stopLoss); // = R
@@ -144,8 +144,11 @@ export function effectiveStop(lt, livePrice, atrM15Now, p) {
 ### 1.7 Exits (סעיף 13)
 
 ```ts
-// Per logical trade, closes every lot together:
-if (live <= stop) reason = `Stop Loss ב-${stop}`;
+// Per logical trade, closes every lot together. Stop exits confirm on the
+// last CLOSED M15 candle — not intrabar; the 4.2% cap is the one intrabar
+// emergency exit (operator decision 2026-09-08):
+if (live beyond 4.2% cap) reason = `חריגת תקרת הפסד — יציאת חירום`;
+else if (lastClosedM15Close beyond stop) reason = `Stop Loss ב-${stop} (סגירת נר M15)`;
 else if (live >= tp) reason = `Take Profit ב-${tp} (2R)`;
 else if (H1 Supertrend flipped against position) reason = `היפוך מגמה — H1 Supertrend התהפך`;
 else if (now - openTimestamp >= 24 * 60 * 60 * 1000) reason = `Time Stop — 24 נרות H1`;

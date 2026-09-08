@@ -19,8 +19,10 @@
 //   · stop management (spec §12): break-even at +1R, ATR trailing from +1.5R,
 //     recomputed every tick from the immutable entry + the factory-tracked
 //     highest/lowest price (the codebase never mutates pos.stopLoss).
-//   · exits (spec §13): effective stop, TP (2R), H1 Supertrend reversal,
-//     24×H1 time stop.
+//   · exits (spec §13): effective stop — CLOSE-CONFIRMED on the last closed
+//     M15 candle (a wick through the stop does not close the trade; the
+//     shared 4.2% cap is the one intrabar emergency exit), TP ladder, H1
+//     Supertrend reversal, 24×H1 time stop.
 
 import { Candle, calculateATR, calculateSupertrend } from './tradeEngine';
 import type { SignalEvaluation } from './intradayBridge';
@@ -36,6 +38,7 @@ import {
   reachedTarget,
   positionPnlPercent,
   capStopLoss,
+  maxLossStopLevel,
   TP1_EXIT_FRACTION,
   MAX_LOSS_PERCENT
 } from './exitPolicy';
@@ -231,8 +234,9 @@ export function effectiveStop(
   // Never loosen past the original protective stop.
   stop = isLong ? Math.max(stop, stop0) : Math.min(stop, stop0);
   // Apply the shared 4.2% loss cap — tightens stop if needed, never loosens.
-  // The signal computed structuralStop from 1.5×ATR; trailing may have loosened
-  // it, but the policy ceiling applies to all exits (operator decision 2026-09-08).
+  // The signal computed structuralStop from slAtrMultiplier×ATR; trailing may
+  // have loosened it, but the policy ceiling applies to all exits (operator
+  // decision 2026-09-08).
   stop = capStopLoss(entry0, stop, isLong);
   return { stop, progressR };
 }
@@ -262,6 +266,17 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     const tp = first.takeProfit ?? first.takeProfit1;
     const atrM15Now = currentAtrM15(set, p);
     const { stop, progressR } = effectiveStop(lt, live, atrM15Now, p);
+
+    // Stop exits are CLOSE-CONFIRMED on the last CLOSED M15 candle (operator
+    // decision 2026-09-08): a wick through the stop no longer closes the trade
+    // — the M15 close must sit beyond it. The forming bar is excluded upstream
+    // (trendBreakout.ts header), so this close is final. The one intrabar
+    // exception is the shared 4.2% hard cap below — the documented "never lose
+    // more than MAX_LOSS_PERCENT" emergency brake, which still fires on touch.
+    // Defensive fallback: with no M15 series the stop reverts to touch behaviour.
+    const closedM15 = set?.m15?.[set.m15.length - 1];
+    const confirmClose = closedM15?.close ?? live;
+    const capLevel = maxLossStopLevel(first.entryPrice, isLong);
 
     const pnlPct = positionPnlPercent(first.entryPrice, live, isLong);
     const tp2 = first.takeProfit2;
@@ -294,10 +309,16 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     }
 
     let reason = '';
-    if (reachedStop(live, stop, isLong)) {
+    if (reachedStop(live, capLevel, isLong)) {
+      reason = `חריגת תקרת הפסד ${MAX_LOSS_PERCENT}% בתוך נר — יציאת חירום (${pnlPct.toFixed(2)}%)`;
+    } else if (reachedStop(confirmClose, stop, isLong)) {
+      // "תקרה" only when the cap is what actually binds the stop (capStopLoss
+      // pulled the ATR stop in) — a normal ATR stop is labelled as such.
+      const atCap = Math.abs(stop - capLevel) <= Math.abs(capLevel) * 1e-9 + 1e-12;
+      const stopTag = atCap ? `תקרה ${MAX_LOSS_PERCENT}%` : 'סטופ ATR';
       reason = progressR >= p.breakEvenR
-        ? `Trailing/BE stop ב-${stop.toFixed(6)} (${progressR.toFixed(2)}R)`
-        : `Stop Loss ב-${stop.toFixed(6)} (${pnlPct.toFixed(2)}%, תקרה ${MAX_LOSS_PERCENT}%)`;
+        ? `Trailing/BE stop ב-${stop.toFixed(6)} (${progressR.toFixed(2)}R, סגירת נר M15)`
+        : `Stop Loss ב-${stop.toFixed(6)} (${pnlPct.toFixed(2)}%, ${stopTag}, סגירת נר M15)`;
     } else if (tp2Reached) {
       reason = `TP2 הושג ב-${(tp2 as number).toFixed(6)} (+${pnlPct.toFixed(2)}%)`;
     } else if (tp && !first.tp1Hit && reachedTarget(live, tp, isLong)) {

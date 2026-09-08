@@ -53,8 +53,10 @@ signal candle, breakout price, entry price, confidence, ATR, trend, position
 size, SL, TP. **אין כניסה כפולה על אותו breakout.**
 
 ## 9. Stop Loss (דינמי, ATR)
-LONG: `SL = Entry − ATR(M15) × 1.5` · SHORT: `SL = Entry + ATR(M15) × 1.5`.
-`R = |Entry − SL|`.
+LONG: `SL = Entry − ATR(M15) × 2.8` · SHORT: `SL = Entry + ATR(M15) × 2.8`.
+`R = |Entry − SL|`. תקרת 4.2% (`MAX_LOSS_PERCENT`) מצמידה פנימה סטופ רחב מדי —
+היא תקרה, לא יעד (החלטת מפעיל 2026-09-08: המכפיל הורחב מ-1.5 כדי שהסטופ יימתח
+לכיוון התקרה בתנודתיות רגילה).
 
 ## 10. Take Profit
 `TP = Entry ± R × 2.0` (Risk/Reward 1:2).
@@ -71,7 +73,9 @@ NO AVERAGING DOWN.**
 `1 × ATR(M15)`, מתקדם רק בכיוון הרווח, לעולם לא מתרחק אחרי שהוקטן.
 
 ## 13. Exit Conditions
-A. SL נחצה. B. TP נחצה. C. Trend Reversal — LONG נסגרת אם H1 Supertrend → DOWN
+A. SL נחצה — **בסגירת נר M15** (לא בתוך נר; פִּיּק דרך הסטופ לא סוגר את העסקה).
+   חריגת תקרת 4.2% בתוך נר היא החריג היחיד — יציאת חירום מיידית.
+B. TP נחצה. C. Trend Reversal — LONG נסגרת אם H1 Supertrend → DOWN
 (SHORT → UP). D. Time Stop — אחרי 24 נרות H1. E. Invalidated Setup — חוסם
 scale נוסף (לא סוגר).
 
@@ -116,7 +120,7 @@ signal · reason. סיבות ל-NO_SIGNAL: `H1_TREND_NEUTRAL`,
 ## 23. פרמטרים configurable (ללא אופטימיזציה אוטומטית בשלב ראשון)
 `SUPERTREND_ATR_PERIOD=10` · `SUPERTREND_MULTIPLIER=3.0` · `DONCHIAN_PERIOD=20` ·
 `ATR_PERIOD=14` · `VOLUME_MULTIPLIER=1.2` · `MIN_CONFIDENCE=70` ·
-`SL_ATR_MULTIPLIER=1.5` · `TP_R_MULTIPLIER=2.0` · `RISK_PER_TRADE=0.5%` ·
+`SL_ATR_MULTIPLIER=2.8` · `TP_R_MULTIPLIER=2.0` · `RISK_PER_TRADE=0.5%` ·
 `BREAK_EVEN_R=1.0` · `TRAILING_START_R=1.5` · `TRAILING_ATR_MULTIPLIER=1.0` ·
 `MAX_HOLD_HOURS=24`. ראה `DEFAULT_TREND_BREAKOUT_PARAMS` ב-`trendBreakout.ts`.
 
