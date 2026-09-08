@@ -205,16 +205,19 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
     ...extra
   });
 
-  if (!h1 || h1.length < PREV4H_MIN_H1_CANDLES) {
+  if (!h1 || h1.length < 4) {
     return base('NO_DATA', 'NO_DATA', [{
-      label: 'נתונים', value: `H1 ${h1?.length ?? 0}/${PREV4H_MIN_H1_CANDLES}`, impact: 'neutral', note: 'אין מספיק נרות'
+      label: 'נתונים', value: `H1 ${h1?.length ?? 0}/4`, impact: 'neutral', note: 'אין מינימום של 4 נרות H1'
     }]);
   }
 
   const h4 = aggregateToH4(h1);
-  if (h4.length < p.minH4Bars) {
+  const minH4Required = Math.min(p.minH4Bars, Math.max(1, Math.floor(h1.length / 4)));
+  // Fallback: if h1 is short (e.g. 16 candles after restart), use 1 H4 bar.
+  // Confidence will be lower due to limited history, but prevents multi-day freeze.
+  if (h4.length < minH4Required) {
     return base('NO_DATA', 'NO_DATA', [{
-      label: 'נתונים', value: `H4 ${h4.length}/${p.minH4Bars}`, impact: 'neutral', note: 'אין מספיק נרות 4H'
+      label: 'נתונים', value: `H4 ${h4.length}/${minH4Required}`, impact: 'neutral', note: 'אין מספיק נרות 4H'
     }]);
   }
 

@@ -208,10 +208,14 @@ export const SIM_BASE_DEFAULTS = {
  * passes what it found, and the frontend passes nothing and gets the base.
  */
 export interface SimEnvOverrides {
-  /** BOT_MIN_CONFIDENCE. A SCORE — see the guard in simBotDefaults. For Pro
-   *  this is alg.md §3's `minConfidenceOverride`. */
+  /** BOT_MIN_CONFIDENCE. A SCORE applied to Intraday and Pro only — see the
+   *  guard in simBotDefaults. For Pro this is alg.md §3's `minConfidenceOverride`. */
   minConfidence?: number;
-  /** BOT_PATH_MIN_CONFIDENCE. A probability, for the one bot that speaks in them. */
+  /** BOT_BYBIT_MIN_CONFIDENCE. A SCORE for Bybit (TrendBreakout), calibrated
+   *  differently from Intraday/Pro. Separate so the operator can tune each bot. */
+  bybitMinConfidence?: number;
+  /** BOT_PATH_MIN_CONFIDENCE. A SCORE for Path (Prev4hRange), separate because
+   *  its confidence distribution differs from the others. */
   pathMinConfidence?: number;
   positionPercent?: number;
   maxPositions?: number;
@@ -254,9 +258,15 @@ export function simBotDefaults(id: SimBotId, env: SimEnvOverrides = {}): SimBotC
     // 0 = "not set": Pro's own proMinConfidence() applies §3's risk-level
     // table. Only an explicit operator override replaces that.
     ? (env.minConfidence ?? 0)
-    : spec.confidenceScale === 'probability'
+    : id === 'path'
+      // Path has its own knob (BOT_PATH_MIN_CONFIDENCE) so the operator can
+      // tune it separately from the other bots' shared knob.
       ? (env.pathMinConfidence ?? spec.minConfidence)
-      : (env.minConfidence ?? spec.minConfidence);
+      : id === 'bybit'
+        // Bybit (TrendBreakout) has its own calibration and knob
+        // (BOT_BYBIT_MIN_CONFIDENCE).
+        ? (env.bybitMinConfidence ?? spec.minConfidence)
+        : (env.minConfidence ?? spec.minConfidence);
 
   const riskLevel = env.riskLevel ?? SIM_BASE_DEFAULTS.riskLevel;
 

@@ -107,10 +107,10 @@ describe('evaluatePrev4hRange — signal', () => {
     expect(ev.status).toContain('STALE_BAR');
   });
 
-  it('abstains with NO_DATA below the minimum candle count', () => {
-    const ev = evaluatePrev4hRange({ symbol: 'THIN', h1: h1Series(40, 100, 0.3), currentPrice: 120, now: nowInNextWindow(40) });
+  it('abstains with NO_DATA below the minimum candle count (< 4)', () => {
+    // Fallback mode kicks in at 4 H1 candles (1 H4 bar). Below that is NO_DATA.
+    const ev = evaluatePrev4hRange({ symbol: 'THIN', h1: h1Series(3, 100, 0.3), currentPrice: 120, now: nowInNextWindow(3) });
     expect(ev.status).toContain('NO_DATA');
-    expect(PREV4H_MIN_H1_CANDLES).toBe(96);
   });
 
   it('is lookahead-free: appending a partial current-window H1 candle does not change the decision', () => {

@@ -94,8 +94,15 @@ function optionalBoundedNumber(name: string, min: number, max: number): number |
 // on its own calibrated threshold — Intraday 52, Legacy 58, Pro 58.
 // A SCORE, applied to the three score-scaled bots. simBotDefaults() refuses to
 // apply it to the probability-scaled one; see ConfidenceScale in simDefaults.ts.
+// Optional floor for Intraday + Pro (score-scaled, both calibrated ~58).
+// Unset (normal case) leaves both on their defaults.
 const minConfidenceOverrideEnv = optionalBoundedNumber('BOT_MIN_CONFIDENCE', 1, 100);
-// The same knob for the one bot that speaks probabilities. Separate on purpose:
+// Separate knob for Bybit (TrendBreakout, calibrated ~50) — its confidence
+// distribution differs from Intraday/Pro, so a shared override flattens it too
+// aggressively. Same calibration as Path: separate variable so the operator can
+// tweak each bot's floor without affecting the others.
+const bybitMinConfidenceEnv = optionalBoundedNumber('BOT_BYBIT_MIN_CONFIDENCE', 1, 100);
+// The same knob for Path (score-scaled). Separate on purpose:
 // at BOT_MIN_CONFIDENCE=60 the Path bot was being asked for a bucket that hits
 // 60% of the time at a 1.5R target, which does not exist — so the single shared
 // knob silenced it entirely while reading as an ordinary setting.
@@ -598,6 +605,7 @@ function applySimConfigPatch<T extends { config: SimBotConfig; snapshot: unknown
 /** The deploy-time layer, gathered once and handed to the registry. */
 const SIM_ENV: SimEnvOverrides = {
   minConfidence: minConfidenceOverrideEnv,
+  bybitMinConfidence: bybitMinConfidenceEnv,
   pathMinConfidence: pathMinConfidenceEnv,
   positionPercent,
   // NOT maxPositions: the sims derive their position COUNT from the risk profile

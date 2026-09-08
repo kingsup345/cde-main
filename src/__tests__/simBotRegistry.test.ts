@@ -93,13 +93,28 @@ describe('Test B — scale parity: every sim bot now reports a 0-100 signal scor
     expect(SIM_BOTS.bybit.confidenceScale).toBe('score');
   });
 
-  it('applies BOT_MIN_CONFIDENCE to every score bot alike', () => {
+  it('applies BOT_MIN_CONFIDENCE to intraday and pro (shared knob)', () => {
     const env = { minConfidence: 60 };
     expect(simBotDefaults('intraday', env).minConfidenceOverride).toBe(60);
     expect(simBotDefaults('pro', env).minConfidenceOverride).toBe(60);
-    expect(simBotDefaults('bybit', env).minConfidenceOverride).toBe(60);
-    // Path is score-scaled now, so the shared knob reaches it like the rest.
-    expect(simBotDefaults('path', env).minConfidenceOverride).toBe(60);
+    // Bybit has its own knob (BOT_BYBIT_MIN_CONFIDENCE) to avoid dampening
+    // its separate confidence distribution, so the shared knob does NOT reach it.
+    expect(simBotDefaults('bybit', env).minConfidenceOverride).toBe(70); // its default, not 60
+  });
+
+  it('applies BOT_BYBIT_MIN_CONFIDENCE to bybit only (separate knob)', () => {
+    const env = { minConfidence: 60, bybitMinConfidence: 65 };
+    expect(simBotDefaults('bybit', env).minConfidenceOverride).toBe(65);
+    expect(simBotDefaults('intraday', env).minConfidenceOverride).toBe(60);
+    expect(simBotDefaults('pro', env).minConfidenceOverride).toBe(60);
+  });
+
+  it('path has its own knob (BOT_PATH_MIN_CONFIDENCE), separate from the shared knob', () => {
+    const env = { minConfidence: 60, pathMinConfidence: 62 };
+    // Path uses pathMinConfidence if set, not the shared knob.
+    expect(simBotDefaults('path', env).minConfidenceOverride).toBe(62);
+    // Intraday and Pro use the shared knob.
+    expect(simBotDefaults('intraday', env).minConfidenceOverride).toBe(60);
   });
 
   it('with no environment, returns the compile-time base unchanged', () => {
