@@ -35,6 +35,7 @@ import {
   reachedStop,
   reachedTarget,
   positionPnlPercent,
+  capStopLoss,
   TP1_EXIT_FRACTION,
   MAX_LOSS_PERCENT
 } from './exitPolicy';
@@ -229,6 +230,10 @@ export function effectiveStop(
   }
   // Never loosen past the original protective stop.
   stop = isLong ? Math.max(stop, stop0) : Math.min(stop, stop0);
+  // Apply the shared 4.2% loss cap — tightens stop if needed, never loosens.
+  // The signal computed structuralStop from 1.5×ATR; trailing may have loosened
+  // it, but the policy ceiling applies to all exits (operator decision 2026-09-08).
+  stop = capStopLoss(entry0, stop, isLong);
   return { stop, progressR };
 }
 
