@@ -369,7 +369,7 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       .filter((o) => ENTRY_SIDES.has(o.side))
       .map((o) => tradeKey(o.symbol, o.side === 'sell' || o.side === 'short' ? 'SHORT' : 'LONG'))
   );
-  let logicalTradeCount = openLogicalKeys.size;
+  let logicalTradeCount = openLogicalKeys.size + pendingEntryKeys.size;
 
   /** Places one entry lot, respecting cash + both exposure caps. Returns the
     *  notional actually committed (0 if nothing could be placed). */
