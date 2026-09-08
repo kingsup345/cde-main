@@ -213,7 +213,9 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
       blockEntry(ev, 'MAX_FUTURES', `SHORT דורש FUTURES — ${futuresCount}/${ctx.maxFuturesPositions} תפוסות`, '[path-sim]');
       continue; // SHORT = futures
     }
-    const price = plan.entryRef;
+    // LIMIT mode rests at the plan's own discounted level; MARKET mode fires at
+    // the live price. Sizing is off whichever price the order actually uses.
+    const price = ctx.limitEntries ? plan.limitEntryPrice : plan.entryRef;
 
     // Position sizing: 10% of equity, independent of stop-loss distance.
     // SL is used only to measure the resulting dollar risk.

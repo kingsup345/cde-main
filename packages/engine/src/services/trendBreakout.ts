@@ -17,7 +17,8 @@ import {
   Candle,
   calculateATR,
   calculateEMA,
-  calculateSupertrend
+  calculateSupertrend,
+  breakoutLimitPrice
 } from './tradeEngine';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
@@ -58,6 +59,10 @@ export interface TrendBreakoutParams {
   maxHoldHours: number;
   /** Scale-in lot fractions of the full position (spec §11). */
   scaleFractions: number[];
+  /** Resting-limit discount from market, in ATR(M5) units — the same knob shape
+   *  as the intraday bot's entryLimitOffsetAtr (0.15). Only read when the
+   *  operator has limit entries on. */
+  entryLimitOffsetAtrMult: number;
   /** SCALE_2 allowed only at >= this many R. */
   scale2MinR: number;
   /** SCALE_3 allowed only at >= this many R. */
@@ -106,6 +111,7 @@ export const DEFAULT_TREND_BREAKOUT_PARAMS: TrendBreakoutParams = {
   m15EmaSlow: 50,
   m5EmaFast: 9,
   m5EmaSlow: 21,
+  entryLimitOffsetAtrMult: 0.15,
   minH1: 200,
   minM15: 300,
   minM5: 30,
@@ -163,6 +169,11 @@ export interface TrendBreakoutPlan {
   takeProfit: number;
   /** R in price units: |entryRef - stopLoss|. */
   riskPerUnit: number;
+  /** Where a LIMIT entry rests when the operator has limit entries on. A
+   *  discount below market (above, for a short), floored just past the broken
+   *  Donchian level. Equals entryRef only when the breakout is too fresh to
+   *  leave room. Market-mode entries ignore it. */
+  limitEntryPrice: number;
   confidence: number;
   components: { supertrend: number; emaTrend: number; breakout: number; volume: number; m5: number };
 }
@@ -317,6 +328,9 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
 
   // ── §9/§10 levels ──────────────────────────────────────────────────────
   const entryRef = currentPrice;
+  const limitEntryPrice = breakoutLimitPrice(
+    entryRef, isLong, p.entryLimitOffsetAtrMult * atrM5, brokeLevel, 0.02 * atrM5
+  );
   const rUnit = p.slAtrMultiplier * atrM15;
   const stopLoss = isLong ? entryRef - rUnit : entryRef + rUnit;
   const takeProfit = isLong ? entryRef + rUnit * p.tpRMultiplier : entryRef - rUnit * p.tpRMultiplier;
@@ -334,6 +348,7 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
     reasonCode: confidence >= p.minConfidence ? 'OK' : 'CONFIDENCE_BELOW_MIN',
     breakoutPrice,
     entryRef,
+    limitEntryPrice,
     atrH1,
     atrM15,
     atrM5,

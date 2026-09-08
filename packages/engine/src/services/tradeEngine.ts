@@ -425,6 +425,49 @@ export const DEFAULT_SLIPPAGE_PERCENT = 0.05;
  * shifts the whole band rather than adding a constant, so a market modelled as
  * twice as thin costs twice as much on both the good and the bad fills.
  */
+/**
+ * Resting-limit price for a breakout entry, built the same way the intraday bot
+ * builds its own (intradayEntry.ts): a volatility-scaled discount below market
+ * (above, for a short), clamped so it never sits on the wrong side of the level
+ * that was broken and never above the market for a buy.
+ *
+ * Why this exists: both breakout bots used to rest their "limit" at
+ * `entryRef = currentPrice` — the live price at signal time. `selectFillableOrders`
+ * fills a long once `live <= signalPrice`, and `<=` includes equality, so a flat
+ * tick (or a price cache that had not refreshed in the 3-second execution delay)
+ * filled it instantly. A limit to buy AT the market is a market order with extra
+ * steps. Measured on the live worker 2026-09-08 with limit entries ON: intraday
+ * had 4 orders resting 208-212s and pro had 3 resting 93-212s, while path and
+ * bybit each had ZERO pending despite holding open positions.
+ *
+ * It also removed a cost asymmetry that flattered those two bots: a limit fill
+ * pays zero slippage and a maker fee, so the checkbox was handing them a free
+ * discount without the waiting cost — inside a framework whose entire purpose is
+ * that differences between bots come from DECISIONS, not from plumbing.
+ *
+ * The clamp order is min(max(discounted, justAboveTrigger), market):
+ *   · a roomy breakout rests at the full discount,
+ *   · a breakout close to its trigger rests just above the trigger,
+ *   · a razor-fresh breakout rests at the market and fills at once — honest,
+ *     and never ABOVE the market, which would be a market order wearing a
+ *     limit's name.
+ */
+export function breakoutLimitPrice(
+  market: number,
+  isLong: boolean,
+  offset: number,
+  brokenLevel: number,
+  levelBuffer: number
+): number {
+  const discounted = isLong ? market - offset : market + offset;
+  const justPastLevel = isLong ? brokenLevel + levelBuffer : brokenLevel - levelBuffer;
+  const floored = isLong
+    ? Math.max(discounted, justPastLevel)
+    : Math.min(discounted, justPastLevel);
+  // Never above the market for a buy / below it for a sell.
+  return isLong ? Math.min(floored, market) : Math.max(floored, market);
+}
+
 export function simulateSlippage(
   marketPrice: number,
   side: 'BUY' | 'SELL' | 'LONG' | 'SHORT',

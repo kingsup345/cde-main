@@ -489,7 +489,9 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       continue;
     }
 
-    const price = plan.entryRef || ev.price;
+    // LIMIT mode rests at the plan's own discounted level; MARKET mode fires at
+    // the live price. Sizing is off whichever price the order actually uses.
+    const price = (ctx.limitEntries ? plan.limitEntryPrice : plan.entryRef) || ev.price;
 
     // Position sizing: 10% of equity, independent of stop-loss distance.
     // SL is used only to measure the resulting dollar risk.

@@ -19,6 +19,7 @@ export {
   calculateTradingFee,
   FEE_REFERENCE_PERCENT,
   simulateSlippage,
+  breakoutLimitPrice,
   DEFAULT_SLIPPAGE_PERCENT,
   calculateBreakEvenPrice
 } from './services/tradeEngine';

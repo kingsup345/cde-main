@@ -16,7 +16,7 @@
 // bar only once all four of its H1 candles have closed, so `prev` is never the
 // forming bar and nothing here reads a future value.
 
-import { Candle, calculateEMA } from './tradeEngine';
+import { Candle, calculateEMA, breakoutLimitPrice } from './tradeEngine';
 import { aggregateToH4 } from './pathEngine';
 import { barOpenFor, BAR_MS } from './pathStudy';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
@@ -57,6 +57,11 @@ export interface Prev4hRangeParams {
   maxExtensionRangeMult: number;
   /** Minimum gross risk:reward ratio required to enter. */
   minRR: number;
+  /** Resting-limit discount from market, in units of the reference bar's RANGE.
+   *  This bot computes no ATR — `range` IS its volatility scale (every level it
+   *  uses is a multiple of it), and a 5-minute ATR would be the wrong scale for
+   *  a 4-hour strategy. Same role as the intraday bot's entryLimitOffsetAtr. */
+  entryLimitOffsetRangeMult: number;
 }
 
 /**
@@ -91,7 +96,8 @@ export const DEFAULT_PREV4H_RANGE_PARAMS: Prev4hRangeParams = {
   minConfidence: 55,
   minH4Bars: 24,
   maxExtensionRangeMult: 0.5,
-  minRR: 1.2
+  minRR: 1.2,
+  entryLimitOffsetRangeMult: 0.10
 };
 
 /** 4H bars needed (params default) → H1 candles needed to build them. */
@@ -137,6 +143,11 @@ export interface Prev4hRangePlan {
   stopLoss: number;
   takeProfit: number;
   riskPerUnit: number;
+  /** Where a LIMIT entry rests when the operator has limit entries on. A
+   *  discount below market (above, for a short), floored just past the broken
+   *  prev-4H level. Equals entryRef only when the breakout is too fresh to
+   *  leave room. Market-mode entries ignore it. */
+  limitEntryPrice: number;
   actualRR: number;
   confidence: number;
   components: { breakout: number; trend: number; range: number };
@@ -254,6 +265,12 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   }
 
   const entryRef = currentPrice;
+  // Floored just past the level that was broken (H for a long, L for a short):
+  // resting below H would be buying back INSIDE the range, which is no longer
+  // the breakout this bot decided to take.
+  const limitEntryPrice = breakoutLimitPrice(
+    entryRef, isLong, p.entryLimitOffsetRangeMult * range, isLong ? H : L, 0.02 * range
+  );
   const stopLoss = mid;
   const riskPerUnit = Math.abs(entryRef - stopLoss);
   const takeProfit = isLong ? H + range * p.tpRangeMult : L - range * p.tpRangeMult;
@@ -292,6 +309,7 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
     ema,
     emaPrev,
     entryRef,
+    limitEntryPrice,
     stopLoss,
     takeProfit,
     riskPerUnit,
