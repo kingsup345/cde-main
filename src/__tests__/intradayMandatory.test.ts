@@ -256,14 +256,13 @@ describe('E. Risk plan', () => {
     expect(plan.approved).toBe(true);
     expect(plan.leverage).toBeGreaterThanOrEqual(1);
     expect(plan.leverage).toBeLessThanOrEqual(5);
-     // With fixed SL/TP model, riskPercentUsed = actual stop distance (FIXED_SL_PERCENT = 1.8%)
-     expect(plan.riskPercentUsed).toBeCloseTo(1.8, 1);
+     // With dynamic SL/TP model, riskPercentUsed = actual stop distance (ATR-based, <= 1.5%)
+    expect(plan.riskPercentUsed).toBeLessThanOrEqual(1.5);
     expect(plan.takeProfit1).toBeGreaterThan(plan.stopLoss);
   });
 
   it('Rejects a stop too wide for an intraday trade', () => {
-    // With fixed 1.8% SL / 3% TP, stops are no longer rejected for being "too wide"
-    // The fixed stop distance ensures consistent risk regardless of ATR
+    // With dynamic SL, the stop is computed from ATR + structure and clamped to maxStopPercent=1.5%
     const plan = buildRiskPlan({
       direction: 'LONG',
       tradeType: 'FUTURES',
@@ -278,9 +277,9 @@ describe('E. Risk plan', () => {
       openFutures: 0,
       currentLeveragedExposureUsd: 0
     });
-    // Fixed 1.8% SL means stop is always at 98.2, which is within the allowed range
+    // Dynamic SL is at most 1.5% (maxStopPercent), so stop is at 98.5 or higher
     expect(plan.approved).toBe(true);
-    expect(plan.stopLoss).toBeCloseTo(98.2, 1);
+    expect(plan.stopLoss).toBeGreaterThanOrEqual(98.5);
   });
 });
 

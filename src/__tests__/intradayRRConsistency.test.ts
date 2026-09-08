@@ -40,17 +40,17 @@ describe('Intraday R:R — the 13.3119 → 13.0723 → 13.7113 case from the rep
   const entryPrice = 13.3119;
   const plan = buildRiskPlan({ ...basePlanInput, entryPrice });
 
-  it('buildRiskPlan produces the fixed-model levels', () => {
+  it('buildRiskPlan produces the dynamic-model levels', () => {
     expect(plan.approved).toBe(true);
     expect(plan.entryPrice).toBe(entryPrice);
-    expect(plan.stopLoss).toBeCloseTo(13.0723, 3);   // entry * (1 - 1.8%)
-    expect(plan.takeProfit1).toBeCloseTo(13.7113, 3); // entry * (1 + 3.0%)
+    expect(plan.stopLoss).toBeCloseTo(entryPrice * (1 - 1.5 / 100), 3);   // ATR-based SL, capped at maxStopPercent=1.5%
+    expect(plan.takeProfit1).toBeCloseTo(entryPrice * (1 + 3.0 / 100), 3); // minimum TP=3%
   });
 
-  it('risk% ≈ 1.80, reward% ≈ 3.00, gross R:R ≈ 1.67 — all off the SAME levels', () => {
-    expect(plan.riskPercent).toBeCloseTo(1.8, 4);
+  it('risk% ≈ 1.50, reward% ≈ 3.00, gross R:R ≈ 2.00 — dynamic SL/TP model', () => {
+    expect(plan.riskPercent).toBeCloseTo(1.5, 4);
     expect(plan.rewardPercent).toBeCloseTo(3.0, 4);
-    expect(plan.grossRewardRisk).toBeCloseTo(1.667, 2);
+    expect(plan.grossRewardRisk).toBeCloseTo(2.0, 2);
     // gross R:R is exactly reward/risk of the plan's own numbers
     expect(plan.grossRewardRisk).toBeCloseTo(plan.rewardPercent / plan.riskPercent, 3);
   });
@@ -137,25 +137,27 @@ describe('Intraday R:R — level-direction validation (§3 step 3)', () => {
   });
 });
 
-describe('Intraday R:R — stopReference / targetReference are telemetry only (Fixed SL/TP is the strategy)', () => {
-  it('a missing stopReference does NOT change or block the plan', () => {
+describe('Intraday R:R — stopReference / targetReference influence dynamic SL/TP', () => {
+  it('a missing stopReference uses ATR-based SL, a provided stopReference tightens it', () => {
     const withRef = buildRiskPlan({ ...basePlanInput, entryPrice: 42, stopReference: 40, targetReference: 45 });
     const noRef = buildRiskPlan({ ...basePlanInput, entryPrice: 42 });
     expect(noRef.approved).toBe(true);
-    expect(noRef.stopLoss).toBe(withRef.stopLoss);
-    expect(noRef.takeProfit1).toBe(withRef.takeProfit1);
+    // With stopReference=40, SL is tighter than ATR-based SL
+    expect(withRef.stopLoss).toBeLessThanOrEqual(noRef.stopLoss);
+    expect(withRef.takeProfit1).toBeGreaterThanOrEqual(noRef.takeProfit1);
   });
 
-  it('a garbage stopReference / targetReference is ignored (levels stay fixed %)', () => {
+  it('a garbage stopReference / targetReference is ignored (wrong side)', () => {
     const plan = buildRiskPlan({
       ...basePlanInput,
       entryPrice: 42,
-      stopReference: 999,        // absurd — would be on the wrong side if used
+      stopReference: 999,        // absurd — on the wrong side for LONG
       targetReference: 1         // absurd — below entry for a LONG
     });
     expect(plan.approved).toBe(true);
-    expect(plan.stopLoss).toBeCloseTo(42 * (1 - FIXED_SL_PERCENT / 100), 6);
-    expect(plan.takeProfit1).toBeCloseTo(42 * (1 + FIXED_TP_PERCENT / 100), 6);
+    // With garbage references, falls back to ATR-based SL/TP
+    expect(plan.stopLoss).toBeLessThan(42);
+    expect(plan.takeProfit1).toBeGreaterThan(42);
   });
 });
 

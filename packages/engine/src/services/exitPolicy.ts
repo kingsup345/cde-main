@@ -154,3 +154,73 @@ export function reachedStop(price: number, stop: number, isLong: boolean): boole
 export function isLongSide(side: string): boolean {
   return side === 'LONG' || side === 'BUY' || side === 'buy' || side === 'long';
 }
+
+/**
+ * Weighted-average exit for a scaling-out position.
+ *
+ * Given an entry price, an array of exit levels and the fraction of the position
+ * closed at each level, returns the weighted-average exit price and the
+ * expected reward / risk / R:R for the FULL position.
+ *
+ * The last level in the array is treated as the "runner" — whatever is left
+ * after the earlier partials is assumed to close there.
+ *
+ *   entry  = 100
+ *   exits  = [{price: 103, fraction: 0.5}, {price: 104.5, fraction: 0.5}]
+ *   → weighted avg exit = 103 * 0.5 + 104.5 * 0.5 = 103.75
+ *   → expected reward    = 3.75%
+ *   → risk is still the SL distance from entry
+ */
+export interface ExitLevel {
+  price: number;
+  fraction: number; // 0..1, share of the position closed at this level
+}
+
+export function weightedAverageExit(
+  entryPrice: number,
+  exitLevels: ExitLevel[],
+  stopLoss: number,
+  isLong: boolean
+): {
+  weightedExitPrice: number;
+  expectedRewardPercent: number;
+  riskPercent: number;
+  expectedRewardRisk: number;
+} {
+  if (!exitLevels.length || !(entryPrice > 0)) {
+    return {
+      weightedExitPrice: entryPrice,
+      expectedRewardPercent: 0,
+      riskPercent: 0,
+      expectedRewardRisk: 0
+    };
+  }
+
+  const totalFraction = exitLevels.reduce((s, e) => s + e.fraction, 0);
+  const normalized = totalFraction > 0
+    ? exitLevels.map(e => ({ ...e, fraction: e.fraction / totalFraction }))
+    : exitLevels;
+
+  let weightedSum = 0;
+  for (const level of normalized) {
+    weightedSum += level.price * level.fraction;
+  }
+
+  const reward = isLong
+    ? weightedSum - entryPrice
+    : entryPrice - weightedSum;
+  const risk = isLong
+    ? entryPrice - stopLoss
+    : stopLoss - entryPrice;
+
+  const rewardPct = (reward / entryPrice) * 100;
+  const riskPct = (risk / entryPrice) * 100;
+  const rr = riskPct > 0 ? rewardPct / riskPct : 0;
+
+  return {
+    weightedExitPrice: weightedSum,
+    expectedRewardPercent: rewardPct,
+    riskPercent: riskPct,
+    expectedRewardRisk: rr
+  };
+}

@@ -8,6 +8,7 @@
 import { BYBIT_FEES } from './tradeEngine';
 import { clamp } from './intradayIndicators';
 import { DEFAULT_INTRADAY_PARAMS, Direction, IntradayParams, SetupType, PER_ASSET_EXPOSURE_CAP_PERCENT, resolveSizingBase } from './intradayParams';
+import { MAX_LOSS_PERCENT, TP1_EXIT_FRACTION } from './exitPolicy';
 
 export interface CostAnalysis {
   // ── The exact levels this analysis was computed on ────────────────────────
@@ -192,14 +193,14 @@ export interface RiskPlanInput {
   tradeType: 'SPOT' | 'FUTURES';
   setupType: Exclude<SetupType, 'NONE'>;
   entryPrice: number;
-  /** TELEMETRY ONLY — NOT used to compute the executed stop, and optional for
-   *  that reason. The executed SL is a fixed FIXED_SL_PERCENT of entry (see
-   *  buildRiskPlan). This structural swing low/high is carried through to the
-   *  decision log for diagnosis and is read by the setup/entry quality scorers
-   *  upstream; buildRiskPlan itself ignores it for level computation. */
+  /** Structural stop level (swing low/high). Used to compute the dynamic SL
+   *  distance together with ATR and the stop buffer. The executed SL is the
+   *  TIGHTER of the structural stop (minus buffer) and the ATR-based stop,
+   *  clamped to [minStopPercent, maxStopPercent=4.2%]. */
   stopReference?: number;
-  /** TELEMETRY ONLY — NOT used to compute the executed target. The executed TP1
-   *  is a fixed FIXED_TP_PERCENT of entry (see buildRiskPlan). */
+  /** Structural target level. Used to compute the dynamic TP1 distance.
+   *  The executed TP1 is the FARTHER of the structural target and the ATR-based
+   *  target, with a hard minimum of FIXED_TP_PERCENT (3%). */
   targetReference?: number | null;
   atr5: number;
   atr15: number;
@@ -216,14 +217,7 @@ export interface RiskPlanInput {
   riskPercent?: number;
   params?: IntradayParams;
   /** Signal confidence (0-100). Telemetry only — nothing in buildRiskPlan reads
-   *  it. It used to waive the exposure caps, the per-asset cap, the exchange
-   *  minimum and the stop-direction invariant at >= 72; every one of those is now
-   *  unconditional. The threshold was never calibrated: no measurement in this
-   *  repo shows that a 72+ score corresponds to a higher win rate than a 60,
-   *  which is the standard every other tuned constant here is held to (see
-   *  KELLY_MIN_SAMPLE / SL_ATR_MULTIPLIER in adaptiveRisk.ts). Establishing that
-   *  would take the same method pathStudy.ts already uses: bucket closed trades
-   *  by score and compare Wilson lower-bound win rates per bucket. */
+   *  it. */
   confidence?: number;
   /** Adaptive sizing multiplier (clamped to [0,1]) injected by the
    *  DecisionEngine orchestrator from recent closed-trade performance — it
@@ -333,39 +327,90 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
     return rejected(`מקסימום ${params.maxOpenFutures} פוזיציות Futures`);
   }
 
-  // Fixed SL/TP: FIXED_SL_PERCENT stop, FIXED_TP_PERCENT target — one definition
-  // (module scope). Prevents the bot from exiting before meaningful profit or
-  // before a reasonable loss threshold. The legacy riskPerTradePercent input is
-  // accepted for API stability but is NOT used for sizing (§21/N2/N4): sizing
-  // always targets positionTargetPct, and the stop is always FIXED_SL_PERCENT.
-  const slDistance = entry * FIXED_SL_PERCENT / 100;
-  const tpDistance = entry * FIXED_TP_PERCENT / 100;
+  const isLong = input.direction === 'LONG';
+  const s = isLong ? 1 : -1;
 
+  // ── Dynamic SL computation ─────────────────────────────────────────────
+  // SL = f(ATR, structure, volatility, regime), clamped to [MIN_STOP, MAX_STOP=4.2%].
+  // Uses stopReference (structural swing) when available, falls back to ATR-based.
+  const atr5 = input.atr5 > 0 ? input.atr5 : entry * 0.001;
+  const atr15 = input.atr15 > 0 ? input.atr15 : atr5;
+
+  // ATR-based stop distance (percent of entry)
+  const atrStopPct = Math.min(
+    (atr5 * params.maxStopAtrMult) / entry * 100,
+    params.maxStopPercent
+  );
+  const minAtrStopPct = Math.min(
+    (atr5 * params.minStopAtrMult) / entry * 100,
+    params.minStopPercent
+  );
+
+  // Structure-based stop distance (from stopReference with buffer)
+  let structureStopPct: number | undefined;
+  if (typeof input.stopReference === 'number' && input.stopReference > 0) {
+    const buffer = params.stopStructureBufferAtr * atr5;
+    const structuralLevel = isLong
+      ? Math.max(0.00000001, input.stopReference - buffer)
+      : input.stopReference + buffer;
+    structureStopPct = Math.abs(entry - structuralLevel) / entry * 100;
+  }
+
+  // Choose the TIGHTER stop (smaller distance = less risk)
+  let slDistancePct = atrStopPct;
+  if (structureStopPct !== undefined && structureStopPct > 0) {
+    slDistancePct = Math.min(slDistancePct, structureStopPct);
+  }
+  // Clamp to [minStopPercent, maxStopPercent]
+  slDistancePct = Math.max(params.minStopPercent, Math.min(params.maxStopPercent, slDistancePct));
+  // Hard 4.2% cap — never exceed
+  slDistancePct = Math.min(slDistancePct, MAX_LOSS_PERCENT);
+
+  const slDistance = entry * slDistancePct / 100;
+
+  // ── Dynamic TP computation ─────────────────────────────────────────────
+  // TP = f(ATR, structure, volatility, regime, minimum_reward=3%).
+  // TP1 distance must be >= 3%. TP2 scales from TP1 by tp2RewardRisk/tp1RewardRisk.
+  const minTp1Distance = entry * FIXED_TP_PERCENT / 100;
+
+  // ATR-based TP1 distance (using reward-risk ratio)
+  const atrTp1Distance = slDistance * params.tp1RewardRisk;
+
+  // Structure-based TP1 distance (from targetReference)
+  let structureTp1Distance: number | undefined;
+  if (typeof input.targetReference === 'number' && input.targetReference > 0) {
+    structureTp1Distance = Math.abs(input.targetReference - entry);
+  }
+
+  // Choose the FARTHER target (larger distance = more reward), but at least 3%
+  let tp1Distance = Math.max(atrTp1Distance, structureTp1Distance ?? 0, minTp1Distance);
+
+  // ── TP impossible gate ──────────────────────────────────────────────────
+  // If the dynamic SL makes it impossible to achieve TP >= 3% with a reasonable
+  // R:R, reject the trade. No artificial SL widening or TP shrinking.
+  const grossRR = tp1Distance / slDistance;
+  if (grossRR < params.minRewardRisk) {
+    return rejected(`R:R נטו ${grossRR.toFixed(2)} מתחת לסף ${params.minRewardRisk} (SL=${slDistancePct.toFixed(2)}%, TP=${(tp1Distance/entry*100).toFixed(2)}%) — NO TRADE`);
+  }
+
+  // ── Compute levels ─────────────────────────────────────────────────────
   let stopLoss: number;
   let takeProfit1: number;
   let takeProfit2: number;
   const stopDistance = slDistance;
-  const isLong = input.direction === 'LONG';
 
-  if (input.tradeType === 'SPOT') {
+  if (input.tradeType === 'SPOT' || isLong) {
     stopLoss = Math.max(0.00000001, entry - slDistance);
-    takeProfit1 = entry + tpDistance;
-    takeProfit2 = entry + tpDistance * 1.5;
-  } else if (isLong) {
-    stopLoss = Math.max(0.00000001, entry - slDistance);
-    takeProfit1 = entry + tpDistance;
-    takeProfit2 = entry + tpDistance * 1.5;
+    takeProfit1 = entry + tp1Distance;
+    takeProfit2 = entry + tp1Distance * (params.tp2RewardRisk / params.tp1RewardRisk);
   } else {
     stopLoss = entry + slDistance;
-    takeProfit1 = Math.max(0.00000001, entry - tpDistance);
-    takeProfit2 = Math.max(0.00000001, entry - tpDistance * 1.5);
+    takeProfit1 = Math.max(0.00000001, entry - tp1Distance);
+    takeProfit2 = Math.max(0.00000001, entry - tp1Distance * (params.tp2RewardRisk / params.tp1RewardRisk));
   }
 
   // Direction check (§3 step 3) — ONE authoritative validator for SL AND TP1
-  // side, zero stop distance, and target==entry. Under the fixed-percentage
-  // model this cannot legitimately fire (SL/TP are entry ± a positive fixed %,
-  // sign-correct); it is the invariant that catches a wrong-side level if the
-  // model is ever changed back to structural stops, or a caller hand-builds one.
+  // side, zero stop distance, and target==entry.
   const dirError = validateLevelDirection(input.direction, entry, stopLoss, takeProfit1);
   if (dirError) return rejected(dirError);
 
@@ -519,14 +564,13 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   const finalTakeProfit1 = Number(takeProfit1.toFixed(8));
   const riskPct = Math.abs(entry - finalStopLoss) / entry * 100;
   const rewardPct = Math.abs(finalTakeProfit1 - entry) / entry * 100;
-  const grossRR = rewardPct / riskPct;
   const actualRiskUsd = notionalUsd * riskPct / 100;
 
   // R:R consistency: recomputed RR must match what we return.
   const displayedRR = Number((rewardPct / riskPct).toFixed(4));
-  if (Math.abs(grossRR - displayedRR) > 0.01) {
+  if (Math.abs(displayedRR - (rewardPct / riskPct)) > 0.01) {
     throw new Error(
-      `ASSERTION_FAIL §24: grossRR ${grossRR.toFixed(4)} ≠ displayedRR ${displayedRR} — ` +
+      `ASSERTION_FAIL §24: displayedRR ${displayedRR.toFixed(4)} ≠ computed RR — ` +
       `floating point drift in risk/reward derivation`
     );
   }

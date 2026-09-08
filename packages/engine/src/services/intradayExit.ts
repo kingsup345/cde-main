@@ -129,22 +129,14 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
   }
 
   // 2 ── Stop loss ───────────────────────────────────────────────────────────
-  // MEAN_REVERSION can optionally require the SL breach to survive a full 5M
-  // candle close (not just a live-price touch) — see meanReversionCloseConfirmStop
-  // in intradayParams.ts. Every other setup type keeps the live-price check.
-  const useCloseConfirmStop =
-    pos.setupType === 'MEAN_REVERSION' &&
-    !!params.meanReversionCloseConfirmStop &&
-    ctx.lastClosedCandleClose !== undefined;
-  const slCheckPrice = useCloseConfirmStop ? ctx.lastClosedCandleClose! : price;
-  if ((isLong && slCheckPrice <= effectiveStopLoss) || (!isLong && slCheckPrice >= effectiveStopLoss)) {
+  // SL triggers immediately on touch/cross — no candle-close confirmation.
+  // The executed stop is the effective stop (4.2% cap applied).
+  if ((isLong && price <= effectiveStopLoss) || (!isLong && price >= effectiveStopLoss)) {
     return {
       shouldExit: true,
       exitType: 'FULL',
       reasonCode: 'STOP_LOSS',
-      reason: useCloseConfirmStop
-        ? `Stop Loss ב-$${formatDynamicPrice(effectiveStopLoss)} (אושר בסגירת נר 5M ב-$${formatDynamicPrice(slCheckPrice)})`
-        : `Stop Loss ב-$${formatDynamicPrice(effectiveStopLoss)} (מחיר $${formatDynamicPrice(price)})`,
+      reason: `Stop Loss ב-$${formatDynamicPrice(effectiveStopLoss)} (מחיר $${formatDynamicPrice(price)})`,
       ...base
     };
   }

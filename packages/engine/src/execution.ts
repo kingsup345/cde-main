@@ -38,8 +38,10 @@ export {
   cappedTakeProfitLevels,
   reachedTarget,
   reachedStop,
-  isLongSide
+  isLongSide,
+  weightedAverageExit
 } from './services/exitPolicy';
+export type { ExitLevel } from './services/exitPolicy';
 
 // ── Simulation defaults, shared by the worker and the browser ─────────────
 export {
