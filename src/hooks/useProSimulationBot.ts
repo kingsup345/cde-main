@@ -379,7 +379,8 @@ export function useProSimulationBot({ config, isRunning, cryptoData, initialSnap
       const result = fillDueOrders(due, cashRef.current, positionsRef.current, priceForRef.current, formatDynamicPrice, {
         feePercent: configRef.current.feePercent,
         slippagePercent: configRef.current.slippagePercent,
-        equity: eqNow
+        equity: eqNow,
+        initialAmount: configRef.current.initialAmount
       });
 
       const dueIds = new Set(due.map((o) => o.id));

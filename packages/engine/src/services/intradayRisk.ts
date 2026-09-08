@@ -7,7 +7,7 @@
 
 import { BYBIT_FEES } from './tradeEngine';
 import { clamp } from './intradayIndicators';
-import { DEFAULT_INTRADAY_PARAMS, Direction, IntradayParams, SetupType, PER_ASSET_EXPOSURE_CAP_PERCENT } from './intradayParams';
+import { DEFAULT_INTRADAY_PARAMS, Direction, IntradayParams, SetupType, PER_ASSET_EXPOSURE_CAP_PERCENT, resolveSizingBase } from './intradayParams';
 
 export interface CostAnalysis {
   // ── The exact levels this analysis was computed on ────────────────────────
@@ -204,6 +204,10 @@ export interface RiskPlanInput {
   atr5: number;
   atr15: number;
   equity: number;
+  /** Capital to size against. Defaults to `equity` (the LIVE bot's behaviour).
+   *  The simulations pass their STARTING capital here so a drawdown reduces how
+   *  many positions fit, not how big each one is — see resolveSizingBase. */
+  sizingBase?: number;
   openPositions: number;
   openFutures: number;
   currentLeveragedExposureUsd: number;
@@ -371,7 +375,12 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   // ── Size: target notional first (§NEW) ─────────────────────────────────────
   // Position sizing is now 10% of equity, independent of stop-loss distance.
   // SL is used only to measure the resulting dollar risk.
-   const targetNotional = input.equity * params.positionTargetPct;
+   // Every percent-of-capital limit below reads this one number. Sizing against
+   // live equity while the per-asset cap also read live equity is what let a
+   // 0.1% drawdown push the 10% target under the $100 order floor and freeze
+   // the bot permanently (see resolveSizingBase).
+   const sizingBase = resolveSizingBase(input.sizingBase, input.equity);
+   const targetNotional = sizingBase * params.positionTargetPct;
    let notionalUsd = targetNotional;
    let quantity = notionalUsd / entry;
    let leverage = 1;
@@ -382,9 +391,9 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
     // `maxSpotNotionalPercent` is the cap expressed in percent-of-equity terms;
     // the actual per-asset check (against existingExposureByAsset) mirrors the
     // FUTURES branch below.
-    const notionalCap = (input.equity * params.maxSpotNotionalPercent) / 100;
+    const notionalCap = (sizingBase * params.maxSpotNotionalPercent) / 100;
     if (input.symbol && input.existingExposureByAsset) {
-      const maxPerAssetExposure = input.equity * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
+      const maxPerAssetExposure = sizingBase * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
       const currentAssetExposure = input.existingExposureByAsset[input.symbol] ?? 0;
       const perAssetCap = maxPerAssetExposure - currentAssetExposure;
       if (perAssetCap <= 0) {
@@ -410,7 +419,7 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
     const totalSpotExposure = input.existingExposureByAsset
       ? Object.values(input.existingExposureByAsset).reduce((sum, v) => sum + v, 0)
       : 0;
-    const totalCap = (input.equity * params.maxLeveragedExposurePercent) / 100;
+    const totalCap = (sizingBase * params.maxLeveragedExposurePercent) / 100;
     if (totalSpotExposure + notionalUsd > totalCap) {
       return rejected(
         `סה״כ חשיפת SPOT ${Math.round(totalSpotExposure + notionalUsd)}$ מעל התקרה ${Math.round(totalCap)}$ (${params.maxLeveragedExposurePercent}% מהתיק)`
@@ -424,7 +433,7 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
     //    the Strategy spec applies to every engine. This is the per-asset cap
     //    for FUTURES, distinct from SPOT's `maxSpotNotionalPercent`.
     // 3. Total leveraged exposure: maxLeveragedExposurePercent (20%).
-    const marginBudget = (input.equity * params.maxMarginPerTradePercent) / 100;
+    const marginBudget = (sizingBase * params.maxMarginPerTradePercent) / 100;
     const notionalCap = marginBudget * params.maxLeverage;
     if (notionalUsd > notionalCap) {
        notionalUsd = notionalCap;
@@ -440,7 +449,7 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
     // high-confidence signal did not merely bypass the limit, it never had its
     // size trimmed to fit under it either.
     if (input.symbol && input.existingExposureByAsset) {
-      const maxPerAssetExposure = input.equity * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
+      const maxPerAssetExposure = sizingBase * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
       const currentAssetExposure = input.existingExposureByAsset[input.symbol] ?? 0;
       const perAssetCap = maxPerAssetExposure - currentAssetExposure;
       if (perAssetCap <= 0) {
@@ -458,7 +467,7 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
     // Minimum leverage that supports the required exposure (§35) — never "max".
     leverage = clamp(Math.ceil(notionalUsd / marginBudget), 1, params.maxLeverage);
 
-    const exposureCap = (input.equity * params.maxLeveragedExposurePercent) / 100;
+    const exposureCap = (sizingBase * params.maxLeveragedExposurePercent) / 100;
     // Unconditional — see the per-asset cap above.
     if (input.currentLeveragedExposureUsd + notionalUsd > exposureCap) {
       return rejected(
@@ -480,8 +489,12 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   // ── Diagnostic assertions (§24) — BEFORE return, fail-loud if violated ─────
   // Position target = positionTargetPct of equity. Below target is OK (trimmed
   // by caps or cash); above target is a bug.
-  if (notionalUsd > 0 && input.equity > 0) {
-    const actualPct = (notionalUsd / input.equity) * 100;
+  // Measured against the SIZING BASE, not live equity: with a fixed base a
+  // drawdown legitimately makes the position a larger share of current equity
+  // (that is the whole point of the model), and asserting on equity would throw
+  // on the very first losing tick.
+  if (notionalUsd > 0 && sizingBase > 0) {
+    const actualPct = (notionalUsd / sizingBase) * 100;
     if (actualPct > params.positionTargetPct * 100 + 0.01) {
       throw new Error(
         `ASSERTION_FAIL §24: positionPercentOfEquity ${actualPct.toFixed(2)}% ` +

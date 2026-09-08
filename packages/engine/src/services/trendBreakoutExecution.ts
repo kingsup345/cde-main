@@ -4,7 +4,8 @@
 // bots — so a difference in results is a difference in DECISIONS, not in
 // plumbing. What is genuinely its own:
 //
-//   · sizing: the shared 10%-of-equity target (POSITION_TARGET_PCT). The stop
+//   · sizing: the shared 10% target, measured against the bot's STARTING
+//     capital (POSITION_TARGET_PCT × initialAmount, see resolveSizingBase). The stop
 //     loss only MEASURES the resulting dollar risk — it never sets the size.
 //     Hard-capped by the shared per-asset (PER_ASSET_EXPOSURE_CAP_PERCENT = 10%)
 //     and total (MAX_TOTAL_EXPOSURE_PERCENT = 80%) limits (spec §15).
@@ -39,7 +40,10 @@ import {
   DAILY_DRAWDOWN_BLOCK_PERCENT,
   WEEKLY_DRAWDOWN_LOCK_PERCENT,
   PER_ASSET_EXPOSURE_CAP_PERCENT,
-  MAX_TOTAL_EXPOSURE_PERCENT
+  MAX_TOTAL_EXPOSURE_PERCENT,
+  CAPITAL_FLOOR_PCT,
+  resolveSizingBase,
+  isBelowCapitalFloor
 } from './intradayParams';
 import {
   DEFAULT_TREND_BREAKOUT_PARAMS,
@@ -118,6 +122,11 @@ export interface TrendBreakoutOrderGenContext {
   weeklyDrawdownPercent: number;
   cash: number;
   equity: number;
+  /** The bot's STARTING capital. Position size and every percent-of-capital cap
+   *  are pinned to THIS, not to live equity, so a drawdown reduces how many
+   *  positions fit rather than shrinking each one. Absent → size against equity
+   *  (previous behaviour). See resolveSizingBase. */
+  initialAmount?: number;
   /** FUTURES notional already open (from the engine factory). */
   totalLeveragedExposureUsd: number;
   exitCooldown: Record<string, number>;
@@ -288,8 +297,12 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
 
   // Running exposure / cash / count as this batch adds orders.
   let workingCash = ctx.cash;
-  const perAssetCap = ctx.equity * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
-  const totalCap = ctx.equity * (MAX_TOTAL_EXPOSURE_PERCENT / 100);
+  // Sizing and every percent-of-capital cap read the STARTING capital, so a
+  // drawdown reduces how many positions fit (cash is still a hard limit) and
+  // never how big each one is. See resolveSizingBase.
+  const sizingBase = resolveSizingBase(ctx.initialAmount, ctx.equity);
+  const perAssetCap = sizingBase * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
+  const totalCap = sizingBase * (MAX_TOTAL_EXPOSURE_PERCENT / 100);
 
   const exposureByBase = new Map<string, number>();
   let totalExposure = 0;
@@ -387,7 +400,7 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     // The shape this equity can express (no lot below the $100 floor), not the
     // nominal 5/3/2 — at small equity the whole target is one lot and there is
     // nothing left to scale into.
-    const targetNotional = ctx.equity * p.positionTargetPct;
+    const targetNotional = sizingBase * p.positionTargetPct;
     const scaleFractions = resolveScaleFractions(targetNotional, p.scaleFractions);
     if (lotCount >= scaleFractions.length) continue;
 
@@ -443,7 +456,17 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     .filter((ev) => ev.willExecute && ev.price)
     .sort((a, b) => b.confidence - a.confidence);
 
+  const belowFloor = isBelowCapitalFloor(ctx.initialAmount, ctx.equity);
+
   for (const ev of ranked) {
+    if (belowFloor) {
+      blockEntry(
+        ev,
+        'CAPITAL_FLOOR',
+        `הון $${ctx.equity.toFixed(2)} מתחת ל-${(CAPITAL_FLOOR_PCT * 100).toFixed(0)}% מההון ההתחלתי $${(ctx.initialAmount ?? 0).toFixed(2)} — כניסות חדשות מושהות`
+      );
+      continue;
+    }
     const plan = readTrendBreakoutPlan(ev);
     if (!plan) {
       blockEntry(ev, 'NO_PLAN', 'הערכה ללא תוכנית TrendBreakout (SL/TP חסרים)');
@@ -475,7 +498,7 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     // no lot under the $100 floor — [0.5,0.3,0.2] at $2,000+ target, a single
     // [1] lot at a $100 target. Sizing the first lot at a flat 0.5 made this
     // bot unable to open anything at all below $2,000 equity, silently.
-    const targetNotional = ctx.equity * p.positionTargetPct;
+    const targetNotional = sizingBase * p.positionTargetPct;
     const scaleFractions = resolveScaleFractions(targetNotional, p.scaleFractions);
 
     if (scaleFractions.length === 0) {

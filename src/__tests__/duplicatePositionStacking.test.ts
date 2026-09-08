@@ -232,12 +232,16 @@ describe('sizing respects the batch: §4 gate 7 allocates against projected cash
     expect(gated.find((e) => e.symbol === 'BTC')?.budgetUsd).toBeCloseTo(650, 6);
   });
 
-  it('pro: the per-asset cap trims each entry when equity itself is the binding constraint', () => {
-    // Cash is plentiful, equity is tight: 10% × 1650 = 165 per entry.
-    // The cap is read off ctx.equity directly and is not itself projected down.
-    const gated = applyProEntryGates([evaluation('LA'), evaluation('BTC')], gateCtx({ cash: 10_000, equity: 1650 }));
-    expect(gated.find((e) => e.symbol === 'LA')?.budgetUsd).toBeCloseTo(165, 6);
-    expect(gated.find((e) => e.symbol === 'BTC')?.budgetUsd).toBeCloseTo(165, 6);
+  it('pro: a drawdown does NOT shrink the position - size is pinned to starting capital', () => {
+    // Cash is plentiful and equity has fallen to $1,650 against a $5,000 start.
+    // Under the old equity-based model each entry was trimmed to 10% of 1,650 =
+    // $165. Since 2026-09-08 sizing reads the STARTING capital, so both entries
+    // stay the full $500 - a loss reduces how many fit, not how big each is.
+    // 1,650 is above the 30% capital floor (0.30 × 5,000 = 1,500), so entries
+    // are still open at all.
+    const gated = applyProEntryGates([evaluation('LA'), evaluation('BTC')], gateCtx({ cash: 10_000, equity: 1650, initialAmount: 5_000 }));
+    expect(gated.find((e) => e.symbol === 'LA')?.budgetUsd).toBeCloseTo(500, 6);
+    expect(gated.find((e) => e.symbol === 'BTC')?.budgetUsd).toBeCloseTo(500, 6);
   });
 
   it('pro: the strongest confidence is allocated first (§4)', () => {

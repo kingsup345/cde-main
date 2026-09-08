@@ -25,7 +25,7 @@ import {
   MultiTimeframeSnapshot,
   SignalEvaluation
 } from './intradayBridge';
-import { DEFAULT_INTRADAY_PARAMS, IntradayParams, SetupType, POSITION_TARGET_PCT, PER_ASSET_EXPOSURE_CAP_PERCENT, MAX_TOTAL_EXPOSURE_PERCENT } from './intradayParams';
+import { DEFAULT_INTRADAY_PARAMS, IntradayParams, SetupType, POSITION_TARGET_PCT, PER_ASSET_EXPOSURE_CAP_PERCENT, MAX_TOTAL_EXPOSURE_PERCENT, CAPITAL_FLOOR_PCT, resolveSizingBase, isBelowCapitalFloor } from './intradayParams';
 import { validateExposureModel } from './simDefaults';
 import {
   evaluateCorrelationGate,
@@ -95,7 +95,12 @@ export const SIM_INTRADAY_PARAMS_OVERRIDE: Partial<IntradayParams> = {
   // pos.maxHoldMs/pos.timeStopMs), so positions opened before this change keep
   // their old, shorter clocks until they close.
   maxHoldMinutes: { TREND_PULLBACK: 120, BREAKOUT_RETEST: 90, MEAN_REVERSION: 90 },
-  timeStopFraction: 0.7
+  timeStopFraction: 0.7,
+  // Operator decision (2026-09-08): size against STARTING capital, not live
+  // equity. A $1,000 bot opens $100 positions for as long as it has capital;
+  // losses reduce how many fit, never how big each one is. Entries stop below
+  // CAPITAL_FLOOR_PCT (30%) of the starting capital. LIVE bot: unset.
+  useFixedSizingBase: true
 };
 
 /**
@@ -351,9 +356,12 @@ export interface EntryBudgetInput {
   /** RiskPlan.betSizeUsd for this signal, when the engine produced one — itself
    *  10% of equity. Can only bring the size DOWN from target, never up. */
   kellyBetSizeUsd?: number;
-  /** Portfolio equity. The 10% target is a fraction of THIS — the single source
-   *  of truth (§1/§12), same as Pro / Path / TrendBreakout. */
+  /** Portfolio equity. Used only when no starting capital is supplied. */
   equity: number;
+  /** The bot's STARTING capital. When present the 10% target is a fraction of
+   *  THIS and stays constant as equity moves — the single source of truth
+   *  (§1/§12), same as Pro / Path / TrendBreakout. See resolveSizingBase. */
+  initialAmount?: number;
   /** Free cash at this point in the batch — a hard upper LIMIT only, never the
    *  target. As cash depletes across a batch the target stays 10% of equity;
    *  the trade is simply skipped once cash can no longer cover it. */
@@ -375,7 +383,7 @@ export interface EntryBudgetInput {
  * reshaped the target, which §12 forbids.
  */
 export function resolveEntryBudget(input: EntryBudgetInput): number {
-  const target = input.equity * POSITION_TARGET_PCT;
+  const target = resolveSizingBase(input.initialAmount, input.equity) * POSITION_TARGET_PCT;
 
   const perfMult = typeof input.sizingMultiplier === 'number' && Number.isFinite(input.sizingMultiplier)
     ? Math.max(0, Math.min(1, input.sizingMultiplier))
@@ -492,6 +500,10 @@ export interface OrderGenContext {
   /** Portfolio equity — the denominator for the losing-streak cooldown's
    *  "was this loss big enough to be a different regime" test. */
   equity: number;
+  /** The bot's STARTING capital: what position size is pinned to, and what the
+   *  CAPITAL_FLOOR entry stop is measured against. Absent → size against
+   *  equity (previous behaviour). */
+  initialAmount?: number;
   /** SimBotConfig.positionPercent / .riskLevel — carried for telemetry only.
    *  Sizing is 10% of equity (§12); neither field reshapes it. */
   positionPercent?: number;
@@ -661,8 +673,22 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
       ]
     : [];
 
+  // Capital floor (operator decision 2026-09-08): position size is pinned to
+  // the STARTING capital, so a losing bot keeps opening full-size positions
+  // until this floor. Below it, entries stop entirely — exits and position
+  // management continue as normal.
+  const belowFloor = isBelowCapitalFloor(ctx.initialAmount, ctx.equity);
+
   for (const ev of evaluations) {
     if (!ev.willExecute || !ev.price || ev.tradeType === 'HOLD') continue;
+    if (belowFloor) {
+      blockEntry(
+        ev,
+        'CAPITAL_FLOOR',
+        `הון $${ctx.equity.toFixed(2)} מתחת ל-${(CAPITAL_FLOOR_PCT * 100).toFixed(0)}% מההון ההתחלתי $${(ctx.initialAmount ?? 0).toFixed(2)} — כניסות חדשות מושהות`
+      );
+      continue;
+    }
     // One position per symbol. Without this, the queue check below is not a
     // dedup at all: once an entry fills, its symbol leaves `pending`, and the
     // very same signal — unchanged, because it is read off a candle that moves
@@ -705,6 +731,7 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
     const rawBudget = resolveEntryBudget({
       kellyBetSizeUsd: ev.betSizeUsd,
       equity: ctx.equity,
+      initialAmount: ctx.initialAmount,
       cash: workingCash,
       sizingMultiplier: riskMult
     });
@@ -885,6 +912,11 @@ export interface SimCostOverrides {
   /** Portfolio equity at the time of fill — used for the fill-time exposure recheck (§11/N5).
    *  Optional: when absent the exposure recheck is skipped (backward-compatible). */
   equity?: number;
+  /** The bot's STARTING capital. The fill-time caps are percentages of the same
+   *  base the order was SIZED against — reading live equity here would re-impose
+   *  the shrinking cap the fixed base exists to avoid, and reject at fill time
+   *  an order that passed at generation time. */
+  initialAmount?: number;
 }
 
 export function fillDueOrders(due: PendingOrder[], cash: number, positions: SimPosition[], priceFor: (symbol: string) => number | undefined, formatPrice: (n: number) => string, costs: SimCostOverrides = {}): FillResult {
@@ -973,8 +1005,9 @@ export function fillDueOrders(due: PendingOrder[], cash: number, positions: SimP
           const totalExposure = isFutures
             ? positions.filter((p) => p.type === 'FUTURES').reduce((sum, p) => sum + p.notionalUsd, 0)
             : positions.filter((p) => p.type === 'SPOT').reduce((sum, p) => sum + p.notionalUsd, 0);
-          const perAssetCap = equity * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
-          const totalCap = equity * (MAX_TOTAL_EXPOSURE_PERCENT / 100);
+          const capBase = resolveSizingBase(costs.initialAmount, equity);
+          const perAssetCap = capBase * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
+          const totalCap = capBase * (MAX_TOTAL_EXPOSURE_PERCENT / 100);
           if (perAssetExposure + notional > perAssetCap) continue;
           if (totalExposure + notional > totalCap) continue;
         }

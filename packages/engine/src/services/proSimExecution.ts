@@ -30,7 +30,7 @@ import {
   type ProSignalResult,
   type ProRiskLevel
 } from './proAlgEngine';
-import { PER_ASSET_EXPOSURE_CAP_PERCENT, POSITION_TARGET_PCT } from './intradayParams';
+import { PER_ASSET_EXPOSURE_CAP_PERCENT, POSITION_TARGET_PCT, CAPITAL_FLOOR_PCT, resolveSizingBase, isBelowCapitalFloor } from './intradayParams';
 import type { Candle } from './tradeEngine';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import type { SimPosition, PendingOrder } from './simExecution';
@@ -228,11 +228,26 @@ export function applyProEntryGates(
       if (!ev.price || ev.price <= 0) {                                                                                         // 6
         return gateResult(ev, 'NO_SIGNAL [NO_PRICE]', 'אין מחיר תקף', false, minConfidence);
       }
+      if (isBelowCapitalFloor(ctx.initialAmount, ctx.equity)) {                                                                  // 7
+        return gateResult(
+          ev,
+          'NO_SIGNAL [CAPITAL_FLOOR]',
+          `הון ${ctx.equity.toFixed(2)}$ מתחת ל-${(CAPITAL_FLOOR_PCT * 100).toFixed(0)}% מההון ההתחלתי ${ctx.initialAmount.toFixed(2)}$ — כניסות חדשות מושהות`,
+          false,
+          minConfidence
+        );
+      }
       // Allocation is confidence-independent under the 10% position-target
       // model. Every new position targets 10% of current equity, regardless of
       // confidence score. Confidence is used for entry gating only.
-      const perAssetCap = ctx.equity * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
-      const targetNotional = ctx.equity * POSITION_TARGET_PCT;
+      // Pinned to the STARTING capital, not live equity (operator decision
+      // 2026-09-08). Sizing against equity meant the $100 order floor equalled
+      // exactly 10% of the $1,000 starting capital, so the first cent of
+      // drawdown refused every entry — measured here at equity $986.78 with
+      // six positions open and plenty of cash. See resolveSizingBase.
+      const sizingBase = resolveSizingBase(ctx.initialAmount, ctx.equity);
+      const perAssetCap = sizingBase * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
+      const targetNotional = sizingBase * POSITION_TARGET_PCT;
       const rawBudget = Math.min(targetNotional, projectedCash, perAssetCap);
       // Skip if target is below exchange minimum — no overshoot.
       if (rawBudget < MIN_SIM_ENTRY_USD) {

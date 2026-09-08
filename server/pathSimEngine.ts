@@ -93,6 +93,7 @@ const pathStrategy: SimEngineStrategy = {
       weeklyDrawdownPercent: input.weeklyDrawdownPercent,
       cash: input.cash,
       equity: input.equity,
+      initialAmount: input.initialAmount,
       totalLeveragedExposureUsd: input.totalLeveragedExposureUsd,
       exitCooldown: input.exitCooldown,
       priceFor: input.priceFor,

@@ -344,6 +344,9 @@ export function evaluateIntradayDecision(input: IntradayDecisionInput): Intraday
     atr5: entry.atr5,
     atr15: setup.levels.atr,
     equity: p.portfolioValue,
+    // SIM-ONLY (params.useFixedSizingBase, set in SIM_INTRADAY_PARAMS_OVERRIDE).
+    // The live bot leaves it unset and keeps sizing against live equity.
+    sizingBase: params.useFixedSizingBase ? p.initialAmount : undefined,
     openPositions: p.openPositionsCount,
     openFutures: p.openFuturesPositionsCount,
     currentLeveragedExposureUsd: p.totalLeveragedExposureUsd,

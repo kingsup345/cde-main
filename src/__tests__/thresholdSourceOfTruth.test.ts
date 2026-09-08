@@ -78,9 +78,11 @@ describe('§3 — minConfidence comes from one flat operator bar, or an override
 
     const roomyCtx = gateCtx({ initialAmount: 10_000, equity: 1_000_000, cash: 1_000_000 });
     const [ev70] = applyProEntryGates([buyEval('LA', 70)], roomyCtx);
-    expect(ev70.budgetUsd).toBeCloseTo(1_000_000 * PRO_ALLOCATION_DEFAULT_PERCENT, 6);
+    // 10% of the $10,000 START, not of the inflated equity.
+    expect(ev70.budgetUsd).toBeCloseTo(10_000 * PRO_ALLOCATION_DEFAULT_PERCENT, 6);
     const [ev85] = applyProEntryGates([buyEval('BTC', 85)], roomyCtx);
-    expect(ev85.budgetUsd).toBeCloseTo(1_000_000 * PRO_ALLOCATION_DEFAULT_PERCENT, 6);
+    expect(ev85.budgetUsd).toBeCloseTo(10_000 * PRO_ALLOCATION_DEFAULT_PERCENT, 6);
+    expect(ev85.budgetUsd).toBe(ev70.budgetUsd);
   });
 });
 
@@ -160,9 +162,27 @@ describe('§4 — the gate sequence runs in the doc\'s order, on the evaluation'
     expect(ev.status).toBe('NO_SIGNAL [NO_SLOTS]');
   });
 
-  it('equity below the $100 sim floor → MIN_ORDER_EXCEEDS_POSITION_TARGET', () => {
+  it('equity wiped out → CAPITAL_FLOOR, the gate that replaced equity-based shrinking', () => {
+    // $4 left of a $10,000 start is far below the 30% floor. Entries stop - and
+    // they stop for a stated reason, not by silently sizing down to nothing.
     const [ev] = applyProEntryGates([buyEval('LA', 80)], gateCtx({ cash: 4, equity: 4 }));
-    expect(ev.status).toBe('NO_SIGNAL [MIN_ORDER_EXCEEDS_POSITION_TARGET]');
+    expect(ev.status).toBe('NO_SIGNAL [CAPITAL_FLOOR]');
+    expect(ev.willExecute).toBe(false);
+  });
+
+  it('a 50% drawdown still trades at FULL size - above the 30% floor', () => {
+    // The operator's rule verbatim: even at a 50% loss the bot keeps entering
+    // at the size fixed against its starting capital.
+    const [ev] = applyProEntryGates([buyEval('LA', 80)], gateCtx({ cash: 5_000, equity: 5_000 }));
+    expect(ev.status).toBe('SIGNAL SPOT BUY');
+    expect(ev.budgetUsd).toBeCloseTo(1000, 6); // 10% of the $10,000 START
+  });
+
+  it('the floor sits at 30% of starting capital - checked either side of the line', () => {
+    const justAbove = applyProEntryGates([buyEval('LA', 80)], gateCtx({ cash: 9_000, equity: 3_001 }))[0];
+    expect(justAbove.status).toBe('SIGNAL SPOT BUY');
+    const justBelow = applyProEntryGates([buyEval('LA', 80)], gateCtx({ cash: 9_000, equity: 2_999 }))[0];
+    expect(justBelow.status).toBe('NO_SIGNAL [CAPITAL_FLOOR]');
   });
 
   it('budget is allocated against CASH, not equity (cash-based sizing)', () => {
@@ -173,19 +193,28 @@ describe('§4 — the gate sequence runs in the doc\'s order, on the evaluation'
     expect(ev.budgetUsd).toBeCloseTo(150, 6); // capped at available cash
   });
 
-  it('low cash below the $100 sim floor refuses even with healthy equity', () => {
-    // $50 cash and only $50 equity → target = 10% × 50 = 5, below MIN_SIM_ENTRY_USD.
-    const [ev] = applyProEntryGates([buyEval('LA', 80)], gateCtx({ cash: 50, equity: 50 }));
+  it('low cash still refuses at the $100 order floor - cash is a hard constraint', () => {
+    // $50 free cash against a $1,000 target. Equity is healthy so the capital
+    // floor does not fire; cash trims the budget under MIN_SIM_ENTRY_USD.
+    const [ev] = applyProEntryGates([buyEval('LA', 80)], gateCtx({ cash: 50, equity: 10_000 }));
     expect(ev.status).toBe('NO_SIGNAL [MIN_ORDER_EXCEEDS_POSITION_TARGET]');
     expect(ev.willExecute).toBe(false);
   });
 
-  it('target reaches $100 when equity supports it — no overshoot below target', () => {
-    // initialAmount $500 → 10% of 10,000 equity = 1000, well above the $100 floor.
+  it('a bot started below $1,000 cannot trade at all - the floor now bites the START', () => {
+    // KNOWN CONSEQUENCE of pinning size to starting capital: 10% of a $500
+    // start is $50, under the $100 order floor, and no equity level rescues it.
+    // Profits do not help either - the base never moves. A bot must be started
+    // with at least MIN_SIM_ENTRY_USD / POSITION_TARGET_PCT = $1,000.
     const [ev] = applyProEntryGates([buyEval('LA', 80)], gateCtx({ initialAmount: 500, cash: 10_000, equity: 10_000 }));
+    expect(ev.status).toBe('NO_SIGNAL [MIN_ORDER_EXCEEDS_POSITION_TARGET]');
+    expect(ev.willExecute).toBe(false);
+  });
+
+  it('$1,000 is exactly the smallest workable starting capital', () => {
+    const [ev] = applyProEntryGates([buyEval('LA', 80)], gateCtx({ initialAmount: 1_000, cash: 1_000, equity: 1_000 }));
     expect(ev.status).toBe('SIGNAL SPOT BUY');
-    expect(ev.willExecute).toBe(true);
-    expect(ev.budgetUsd).toBeCloseTo(1000, 6);
+    expect(ev.budgetUsd).toBeCloseTo(100, 6);
   });
 
   it('every gate passed → willExecute, "מבצע קנייה", and the allocated budget', () => {
@@ -204,15 +233,16 @@ describe('§4 — the gate sequence runs in the doc\'s order, on the evaluation'
     expect(ev.budgetUsd).toBeCloseTo(1000, 6);
   });
 
-  it('allocation is 10% of equity, not initialAmount', () => {
-    // equity 100,000 → target = 10,000. Cash is sufficient.
+  it('allocation is 10% of initialAmount, not equity (inverted 2026-09-08)', () => {
+    // A 100x gain does not grow the position either - the base is fixed in both
+    // directions. $1,000 start means $100 positions, at any equity.
     const [ev] = applyProEntryGates([buyEval('LA', 85)], gateCtx({ initialAmount: 1000, equity: 100_000, cash: 100_000 }));
-    expect(ev.budgetUsd).toBeCloseTo(10_000, 6);
+    expect(ev.budgetUsd).toBeCloseTo(100, 6);
   });
 
-  it('the per-asset cap trims to 10% — below the sim floor it becomes MIN_ORDER_EXCEEDS_POSITION_TARGET', () => {
-    // 10% of 1 = 0.1, below the $100 sim floor → skip.
-    const [ev] = applyProEntryGates([buyEval('LA', 95)], gateCtx({ equity: 1 }));
+  it('a starting capital under the order floor is refused, not rounded up', () => {
+    // 10% of a $1 start = $0.10. MIN_ORDER stays a constraint, never a size.
+    const [ev] = applyProEntryGates([buyEval('LA', 95)], gateCtx({ initialAmount: 1, equity: 1, cash: 1 }));
     expect(ev.status).toBe('NO_SIGNAL [MIN_ORDER_EXCEEDS_POSITION_TARGET]');
   });
 });

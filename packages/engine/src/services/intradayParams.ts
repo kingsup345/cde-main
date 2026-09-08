@@ -148,6 +148,12 @@ export interface IntradayParams {
   meanReversionMinStopAtrMult?: number;
   /** Overrides minStopPercent specifically for MEAN_REVERSION positions. */
   meanReversionMinStopPercent?: number;
+  /** SIM-ONLY opt-in (2026-09-08). When true, position sizing and the per-asset
+   *  cap are computed against the bot's STARTING capital instead of its live
+   *  equity, and entries stop below CAPITAL_FLOOR_PCT of that capital. The LIVE
+   *  bot leaves this unset and keeps equity-based sizing — see resolveSizingBase
+   *  for why the simulations needed the change. */
+  useFixedSizingBase?: boolean;
   /** When true, a MEAN_REVERSION position's stop-loss only triggers once a
    *  CLOSED 5M candle is beyond the level (not a live-price touch) — filters
    *  out a wick that reverses within the same candle. Only implementable in
@@ -243,6 +249,46 @@ export const PER_ASSET_EXPOSURE_CAP_PERCENT = 10;
  * buffer. `validateExposureModel` enforces `maxPositions × 10% ≤ this`.
  */
 export const MAX_TOTAL_EXPOSURE_PERCENT = 80;
+
+/**
+ * Fraction of the bot's STARTING capital below which it stops opening new
+ * positions. Exits and management keep running — this gates entries only.
+ *
+ * Operator decision (2026-09-08): 0.30, i.e. the bot keeps trading at its
+ * original position size until it has lost 70% of the capital it started with.
+ */
+export const CAPITAL_FLOOR_PCT = 0.30;
+
+/**
+ * The capital a position is sized against.
+ *
+ * Operator decision (2026-09-08): **the bot's STARTING capital, not its current
+ * equity.** A $1,000 bot opens $100 positions forever; a $10,000 bot opens
+ * $1,000 positions forever. Losses reduce how MANY positions fit (free cash is
+ * still a hard constraint) — they do not shrink the size of each one.
+ *
+ * The reason is concrete, not stylistic. With sizing pinned to live equity, the
+ * $100 order floor equalled exactly 10% of the $1,000 starting capital, so the
+ * first cent of drawdown put the target under the floor and every entry was
+ * refused — and the bot could not trade its way back, because it could not
+ * trade. Measured 2026-09-08 with three of the four bots frozen that way:
+ * intraday $995.18, pro $986.78, bybit $995.12 — only path, up 1.2%, still
+ * traded.
+ *
+ * Returns `equity` when no starting capital is known, which is the previous
+ * behaviour: callers that do not opt in are unchanged (the LIVE bot included).
+ */
+export function resolveSizingBase(initialAmount: number | undefined, equity: number): number {
+  return typeof initialAmount === 'number' && initialAmount > 0 ? initialAmount : equity;
+}
+
+/** True once equity has fallen below CAPITAL_FLOOR_PCT of starting capital —
+ *  the point at which fixed-size entries stop. Unknown starting capital never
+ *  trips it. */
+export function isBelowCapitalFloor(initialAmount: number | undefined, equity: number): boolean {
+  if (!(typeof initialAmount === 'number' && initialAmount > 0)) return false;
+  return equity < initialAmount * CAPITAL_FLOOR_PCT;
+}
 
 export const DEFAULT_INTRADAY_PARAMS: IntradayParams = {
   adxTrendMin: 25,

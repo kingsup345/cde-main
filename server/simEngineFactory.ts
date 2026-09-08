@@ -495,7 +495,11 @@ export function createGenericSimEngine(strategy: SimEngineStrategy, getSymbols?:
       const result = fillDueOrders(due, cash, positions, priceFor, formatDynamicPrice, {
         feePercent: config.feePercent,
         slippagePercent: config.slippagePercent,
-        equity: eq
+        equity: eq,
+        // The fill-time exposure caps must read the same base the order was
+        // sized against, or a fill-time recheck against shrinking equity would
+        // reject orders the generator legitimately approved.
+        initialAmount: config.initialAmount
       });
       const dueIds = new Set(due.map((o) => o.id));
       pending = pending.filter((o) => !dueIds.has(o.id));

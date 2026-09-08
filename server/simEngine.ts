@@ -165,6 +165,7 @@ const intradayStrategy: SimEngineStrategy = {
       weeklyDrawdownPercent: input.weeklyDrawdownPercent,
       cash: input.cash,
       equity: input.equity,
+      initialAmount: input.initialAmount,
       positionPercent: input.config.positionPercent,
       riskLevel: input.config.riskLevel,
       limitEntries: input.config.proLimitEntries === true,

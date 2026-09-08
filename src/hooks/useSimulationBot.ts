@@ -547,6 +547,7 @@ export function useSimulationBot({ config, isRunning, cryptoData, recommendation
       weeklyDrawdownPercent,
       cash: cashRef.current,
       equity,
+      initialAmount: config.initialAmount,
       positionPercent: config.positionPercent,
       riskLevel: config.riskLevel,
       limitEntries: config.proLimitEntries === true,
@@ -566,7 +567,7 @@ export function useSimulationBot({ config, isRunning, cryptoData, recommendation
     }
     setLastEvaluation(new Date().toLocaleTimeString('he-IL'));
     setNextTickAt(Date.now() + 5000);
-  }, [isRunning, evaluations, heartbeat, dailyDrawdownPercent, weeklyDrawdownPercent, buildCandlesForSymbol, mtfData, config.executionDelaySec, config.maxPositions, config.maxFuturesPositions, config.positionPercent, config.riskLevel, config.proLimitEntries, closedTradeRecords, correlationCandles, equity]);
+  }, [isRunning, evaluations, heartbeat, dailyDrawdownPercent, weeklyDrawdownPercent, buildCandlesForSymbol, mtfData, config.executionDelaySec, config.maxPositions, config.maxFuturesPositions, config.positionPercent, config.riskLevel, config.proLimitEntries, config.initialAmount, closedTradeRecords, correlationCandles, equity]);
 
   // Heartbeat — reset countdown timer when bot starts/stops.
   // Equity recording is handled exclusively by the background worker below to avoid duplicates.
@@ -639,7 +640,8 @@ export function useSimulationBot({ config, isRunning, cryptoData, recommendation
       const result = fillDueOrders(due, cashRef.current, positionsRef.current, priceForRef.current, formatDynamicPrice, {
         feePercent: configRef.current.feePercent,
         slippagePercent: configRef.current.slippagePercent,
-        equity: eqNow
+        equity: eqNow,
+        initialAmount: configRef.current.initialAmount
       });
 
       const dueIds = new Set(due.map((o) => o.id));

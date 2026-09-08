@@ -4,7 +4,8 @@
 // sim bots — a difference in results is a difference in DECISIONS.
 //
 // Its own:
-//   · sizing: the shared 10%-of-equity target (positionTargetPct). The stop
+//   · sizing: the shared 10% target, measured against the bot's STARTING
+//     capital (positionTargetPct × initialAmount, see resolveSizingBase). The stop
 //     loss only MEASURES the resulting dollar risk — it never sets the size.
 //     Hard-capped by the shared per-asset (PER_ASSET_EXPOSURE_CAP_PERCENT = 10%)
 //     and total (MAX_TOTAL_EXPOSURE_PERCENT = 80%) caps and the $100
@@ -30,7 +31,10 @@ import {
   DAILY_DRAWDOWN_BLOCK_PERCENT,
   WEEKLY_DRAWDOWN_LOCK_PERCENT,
   PER_ASSET_EXPOSURE_CAP_PERCENT,
-  MAX_TOTAL_EXPOSURE_PERCENT
+  MAX_TOTAL_EXPOSURE_PERCENT,
+  CAPITAL_FLOOR_PCT,
+  resolveSizingBase,
+  isBelowCapitalFloor
 } from './intradayParams';
 import { DEFAULT_PREV4H_RANGE_PARAMS, Prev4hRangeParams, readPrev4hRangePlan } from './prev4hRange';
 
@@ -53,6 +57,11 @@ export interface Prev4hRangeOrderGenContext {
   weeklyDrawdownPercent: number;
   cash: number;
   equity: number;
+  /** The bot's STARTING capital. Position size and every percent-of-capital cap
+   *  are pinned to THIS, not to live equity, so a drawdown reduces how many
+   *  positions fit rather than shrinking each one. Absent → size against equity
+   *  (previous behaviour). See resolveSizingBase. */
+  initialAmount?: number;
   totalLeveragedExposureUsd: number;
   exitCooldown: Record<string, number>;
   priceFor: (symbol: string) => number | undefined;
@@ -142,8 +151,12 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
 
   // Running exposure / cash / count.
   let workingCash = ctx.cash;
-  const perAssetCap = ctx.equity * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
-  const totalCap = ctx.equity * (MAX_TOTAL_EXPOSURE_PERCENT / 100);
+  // Sizing and every percent-of-capital cap read the STARTING capital, so a
+  // drawdown reduces how many positions fit (cash is still a hard limit) and
+  // never how big each one is. See resolveSizingBase.
+  const sizingBase = resolveSizingBase(ctx.initialAmount, ctx.equity);
+  const perAssetCap = sizingBase * (PER_ASSET_EXPOSURE_CAP_PERCENT / 100);
+  const totalCap = sizingBase * (MAX_TOTAL_EXPOSURE_PERCENT / 100);
   const exposureByBase = new Map<string, number>();
   let totalExposure = 0;
   for (const pos of ctx.positions) {
@@ -168,7 +181,18 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
     .filter((ev) => ev.willExecute && ev.price)
     .sort((a, b) => b.confidence - a.confidence);
 
+  const belowFloor = isBelowCapitalFloor(ctx.initialAmount, ctx.equity);
+
   for (const ev of ranked) {
+    if (belowFloor) {
+      blockEntry(
+        ev,
+        'CAPITAL_FLOOR',
+        `הון $${ctx.equity.toFixed(2)} מתחת ל-${(CAPITAL_FLOOR_PCT * 100).toFixed(0)}% מההון ההתחלתי $${(ctx.initialAmount ?? 0).toFixed(2)} — כניסות חדשות מושהות`,
+        '[path-sim]'
+      );
+      continue;
+    }
     const plan = readPrev4hRangePlan(ev);
     if (!plan) {
       blockEntry(ev, 'NO_PLAN', 'הערכה ללא תוכנית Prev-4H (רמות חסרות)', '[path-sim]');
@@ -193,7 +217,7 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
 
     // Position sizing: 10% of equity, independent of stop-loss distance.
     // SL is used only to measure the resulting dollar risk.
-    const desiredNotional = ctx.equity * p.positionTargetPct;
+    const desiredNotional = sizingBase * p.positionTargetPct;
 
     // Both refusals below were bare `continue`s — the same blindness that hid
     // Bybit's zero-entry run. Path is spot-first with no scale-in, so its
