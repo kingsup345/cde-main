@@ -166,8 +166,11 @@ describe('Confidence Threshold Enforcement', () => {
   });
 });
 
-describe('Prev4hRange R:R Calculation', () => {
-  it('Test 5: breakoutDistance = 0 → RR = 2.0', () => {
+describe('Prev4hRange TP ladder (flat 3% / 4.5% — operator rule 2026-09-08)', () => {
+  // The bot's own `H + range × tpRangeMult` target was replaced by the shared
+  // flat ladder so no position ever takes profit below +3%. TP1/TP2 are now
+  // fixed percentages of the entry, independent of breakout distance or range.
+  it('Test 5: near-touch breakout → TP1 at +3%, TP2 at +4.5%', () => {
     const H = 100.2;
     const L = 99.8;
     const { h1, now } = buildH1ForPrevBar(H, L, 95);
@@ -181,10 +184,11 @@ describe('Prev4hRange R:R Calculation', () => {
     });
     const plan = readPrev4hRangePlan(ev);
     expect(plan).toBeDefined();
-    expect(plan!.actualRR).toBeCloseTo(2.0, 1);
+    expect(plan!.takeProfit1).toBeCloseTo(plan!.entryRef * 1.03, 4);
+    expect(plan!.takeProfit2).toBeCloseTo(plan!.entryRef * 1.045, 4);
   });
 
-  it('Test 6: breakoutDistance = 0.5 * range → RR = 0.5', () => {
+  it('Test 6: extended breakout → SAME flat TP1 +3% / TP2 +4.5% (not range-scaled)', () => {
     const H = 100.2;
     const L = 99.8;
     const range = H - L;
@@ -199,7 +203,8 @@ describe('Prev4hRange R:R Calculation', () => {
     });
     const plan = readPrev4hRangePlan(ev);
     expect(plan).toBeDefined();
-    expect(plan!.actualRR).toBeCloseTo(0.5, 1);
+    expect(plan!.takeProfit1).toBeCloseTo(plan!.entryRef * 1.03, 4);
+    expect(plan!.takeProfit2).toBeCloseTo(plan!.entryRef * 1.045, 4);
   });
 
   it('Test 7: Entry=13.3119, SL=13.0723, TP=13.7113 → Gross RR ≈ 1.67', () => {

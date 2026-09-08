@@ -81,11 +81,13 @@ describe('evaluateTrendBreakout — signal', () => {
     const plan = readTrendBreakoutPlan(ev) as TrendBreakoutPlan;
     expect(plan).toBeTruthy();
     expect(plan.state).toBe('SIGNAL');
-    // SL below entry, TP above, at 2R.
+    // SL below entry (ATR stop, capped at 4.2%); TP is the shared FLAT ladder —
+    // TP1 at exactly +3%, TP2 at +4.5% of entry (operator rule 2026-09-08),
+    // no longer the bot's own 2R target.
     expect(plan.stopLoss).toBeLessThan(plan.entryRef);
-    expect(plan.takeProfit).toBeGreaterThan(plan.entryRef);
-    const r = plan.entryRef - plan.stopLoss;
-    expect((plan.takeProfit - plan.entryRef) / r).toBeCloseTo(DEFAULT_TREND_BREAKOUT_PARAMS.tpRMultiplier, 4);
+    expect(plan.entryRef - plan.stopLoss).toBeLessThanOrEqual(plan.entryRef * 0.042 + 1e-9);
+    expect(plan.takeProfit1).toBeCloseTo(plan.entryRef * 1.03, 4);
+    expect(plan.takeProfit2).toBeCloseTo(plan.entryRef * 1.045, 4);
   });
 
   it('abstains with H1_TREND_NEUTRAL when H1 has no sustained trend', () => {

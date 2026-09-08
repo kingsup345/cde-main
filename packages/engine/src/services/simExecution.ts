@@ -27,7 +27,7 @@ import {
 } from './intradayBridge';
 import { DEFAULT_INTRADAY_PARAMS, IntradayParams, SetupType, POSITION_TARGET_PCT, PER_ASSET_EXPOSURE_CAP_PERCENT, MAX_TOTAL_EXPOSURE_PERCENT, CAPITAL_FLOOR_PCT, resolveSizingBase, isBelowCapitalFloor } from './intradayParams';
 import { validateExposureModel } from './simDefaults';
-import { TP1_EXIT_FRACTION } from './exitPolicy';
+import { TP1_EXIT_FRACTION, MAX_LOSS_PERCENT } from './exitPolicy';
 import {
   evaluateCorrelationGate,
   toPositionDirection,
@@ -1168,7 +1168,22 @@ export function fillDueOrders(due: PendingOrder[], cash: number, positions: SimP
     } else {
       const pos = workingPositions.find((p) => (order.positionId ? p.id === order.positionId : p.symbol === order.symbol));
       if (pos) {
-        const notional = pos.quantity * fillPrice;
+        // Hard loss cap (operator rule, 2026-09-08): a position may never
+        // REALISE a loss worse than MAX_LOSS_PERCENT of entry — no matter how
+        // far price gapped past the stop during the execution delay, how wide
+        // an old position's stored stop is, or how much adverse slippage the
+        // fill drew. In the adverse case the sim fills the exit exactly at the
+        // 4.2% level. For any profitable or sub-cap exit this is a no-op
+        // (fillPrice is already the better price).
+        const posIsLong = pos.side === 'LONG' || pos.side === 'BUY';
+        const lossCapPrice = posIsLong
+          ? pos.entryPrice * (1 - MAX_LOSS_PERCENT / 100)
+          : pos.entryPrice * (1 + MAX_LOSS_PERCENT / 100);
+        const exitPrice = posIsLong
+          ? Math.max(fillPrice, lossCapPrice)
+          : Math.min(fillPrice, lossCapPrice);
+
+        const notional = pos.quantity * exitPrice;
         const fee = calculateTradingFee(notional, pos.type, true, costs.feePercent);
         let pnl = 0;
         if (pos.type === 'SPOT') {
@@ -1178,13 +1193,13 @@ export function fillDueOrders(due: PendingOrder[], cash: number, positions: SimP
           workingCash += netProceeds;
         } else {
           pnl = pos.side === 'LONG'
-            ? (fillPrice - pos.entryPrice) * pos.quantity
-            : (pos.entryPrice - fillPrice) * pos.quantity;
+            ? (exitPrice - pos.entryPrice) * pos.quantity
+            : (pos.entryPrice - exitPrice) * pos.quantity;
           workingCash += pos.marginUsd + pnl - fee;
         }
 
         feesAdded += fee;
-        slipAdded += Math.abs(market - fillPrice) * pos.quantity;
+        slipAdded += Math.abs(market - exitPrice) * pos.quantity;
         workingPositions = workingPositions.filter((p) => p.id !== pos.id);
         if (pnl < 0) newCooldowns[order.symbol] = Date.now();
 
@@ -1193,7 +1208,7 @@ export function fillDueOrders(due: PendingOrder[], cash: number, positions: SimP
           : (pnl / pos.marginUsd) * 100;
         newTrades.push({
           id: order.id, symbol: order.symbol, type: pos.type, side: order.side,
-          price: fillPrice, requestedPrice: order.signalPrice, slippagePercent, fee, delayMs,
+          price: exitPrice, requestedPrice: order.signalPrice, slippagePercent, fee, delayMs,
           quantity: pos.quantity, usdValue: notional, leverage: pos.leverage, timestamp: now, at: Date.now(),
           reason: order.reason, confidence: order.confidence, pnl, pnlPercent,
           riskUsd: pos.initialRiskUsd
@@ -1206,7 +1221,7 @@ export function fillDueOrders(due: PendingOrder[], cash: number, positions: SimP
             `סמל: ${order.symbol}\n` +
             `כיוון: ${pos.side}\n` +
             `מחיר כניסה: $${formatPrice(pos.entryPrice)}\n` +
-            `מחיר יציאה: $${formatPrice(fillPrice)}\n` +
+            `מחיר יציאה: $${formatPrice(exitPrice)}\n` +
             `רווח/הפסד: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n` +
             `סיבה: ${order.reason || '-'}\n` +
             `זמן: ${now}`

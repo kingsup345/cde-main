@@ -14,6 +14,7 @@
 
 import { formatDynamicPrice } from './tradeEngine';
 import { DEFAULT_INTRADAY_PARAMS, Direction, IntradayParams, SetupType } from './intradayParams';
+import { capStopLoss } from './exitPolicy';
 
 export type ExitReasonCode =
   | 'WEEKLY_PROTECTION'
@@ -90,9 +91,15 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
   const price = ctx.price;
   const atr5 = ctx.atr5 > 0 ? ctx.atr5 : pos.entryPrice * 0.001;
 
+  // Hard 4.2% loss cap, enforced on every evaluation. A position opened before
+  // the cap existed (or with a wider structural stop) has its effective stop
+  // pulled in here on the next tick — never loosened. FIXED_SL_PERCENT (1.8%)
+  // stops are already tighter, so this is a no-op for a normal intraday entry.
+  const effectiveStopLoss = capStopLoss(pos.entryPrice, pos.stopLoss, isLong);
+
   const stopDistance = pos.plannedStopDistance && pos.plannedStopDistance > 0
-    ? pos.plannedStopDistance
-    : Math.max(Math.abs(pos.entryPrice - pos.stopLoss), 1e-12);
+    ? Math.min(pos.plannedStopDistance, Math.abs(pos.entryPrice - effectiveStopLoss))
+    : Math.max(Math.abs(pos.entryPrice - effectiveStopLoss), 1e-12);
 
   const progressR = ((price - pos.entryPrice) * s) / stopDistance;
   const peak = isLong
@@ -130,44 +137,38 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
     !!params.meanReversionCloseConfirmStop &&
     ctx.lastClosedCandleClose !== undefined;
   const slCheckPrice = useCloseConfirmStop ? ctx.lastClosedCandleClose! : price;
-  if ((isLong && slCheckPrice <= pos.stopLoss) || (!isLong && slCheckPrice >= pos.stopLoss)) {
+  if ((isLong && slCheckPrice <= effectiveStopLoss) || (!isLong && slCheckPrice >= effectiveStopLoss)) {
     return {
       shouldExit: true,
       exitType: 'FULL',
       reasonCode: 'STOP_LOSS',
       reason: useCloseConfirmStop
-        ? `Stop Loss ב-$${formatDynamicPrice(pos.stopLoss)} (אושר בסגירת נר 5M ב-$${formatDynamicPrice(slCheckPrice)})`
-        : `Stop Loss ב-$${formatDynamicPrice(pos.stopLoss)} (מחיר $${formatDynamicPrice(price)})`,
+        ? `Stop Loss ב-$${formatDynamicPrice(effectiveStopLoss)} (אושר בסגירת נר 5M ב-$${formatDynamicPrice(slCheckPrice)})`
+        : `Stop Loss ב-$${formatDynamicPrice(effectiveStopLoss)} (מחיר $${formatDynamicPrice(price)})`,
       ...base
     };
   }
 
   // 3 ── Take profit ─────────────────────────────────────────────────────────
-  if (pos.type === 'FUTURES') {
-    if (pos.takeProfit2 && ((isLong && price >= pos.takeProfit2) || (!isLong && price <= pos.takeProfit2))) {
-      return {
-        shouldExit: true,
-        exitType: 'FULL',
-        reasonCode: 'TAKE_PROFIT_2',
-        reason: `TP2 הושג ב-$${formatDynamicPrice(pos.takeProfit2)}`,
-        ...base
-      };
-    }
-    if (!pos.tp1Hit && pos.takeProfit1 && ((isLong && price >= pos.takeProfit1) || (!isLong && price <= pos.takeProfit1))) {
-      return {
-        shouldExit: true,
-        exitType: 'PARTIAL_50',
-        reasonCode: 'TAKE_PROFIT_1',
-        reason: `TP1 הושג ב-$${formatDynamicPrice(pos.takeProfit1)} — סגירת 50% והפעלת Trailing`,
-        ...base
-      };
-    }
-  } else if (pos.takeProfit1 && ((isLong && price >= pos.takeProfit1) || (!isLong && price <= pos.takeProfit1))) {
+  // Same ladder for SPOT and FUTURES (operator rule 2026-09-08): TP1 at 3%
+  // closes 50% and arms the trailing stop, the runner goes to TP2 at 4.5%.
+  // SPOT used to take a single FULL exit at TP1 — the 50%/TP2 half of the
+  // policy was FUTURES-only, and intraday is mostly SPOT.
+  if (pos.takeProfit2 && ((isLong && price >= pos.takeProfit2) || (!isLong && price <= pos.takeProfit2))) {
     return {
       shouldExit: true,
       exitType: 'FULL',
-      reasonCode: 'TAKE_PROFIT',
-      reason: `Take Profit ב-$${formatDynamicPrice(pos.takeProfit1)}`,
+      reasonCode: 'TAKE_PROFIT_2',
+      reason: `TP2 הושג ב-$${formatDynamicPrice(pos.takeProfit2)}`,
+      ...base
+    };
+  }
+  if (!pos.tp1Hit && pos.takeProfit1 && ((isLong && price >= pos.takeProfit1) || (!isLong && price <= pos.takeProfit1))) {
+    return {
+      shouldExit: true,
+      exitType: 'PARTIAL_50',
+      reasonCode: 'TAKE_PROFIT_1',
+      reason: `TP1 הושג ב-$${formatDynamicPrice(pos.takeProfit1)} — סגירת 50% והפעלת Trailing`,
       ...base
     };
   }

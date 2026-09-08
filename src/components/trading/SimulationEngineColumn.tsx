@@ -515,7 +515,12 @@ export default function SimulationEngineColumn({
                     const liveAsset = cryptoData?.find((c) => c.symbol.toUpperCase() === pos.symbol.toUpperCase());
                     const livePrice = liveAsset?.current_price ?? pos.currentPrice ?? pos.entryPrice;
                     const priceDiff = isLong ? livePrice - pos.entryPrice : pos.entryPrice - livePrice;
-                    const pnl = priceDiff * pos.quantity * (pos.leverage || 1);
+                    // No `* leverage` here: `quantity` already carries the full
+                    // (leveraged) size — notional / entryPrice — so the backend
+                    // close-out pnl is `priceDiff * quantity` with no leverage
+                    // term. Multiplying again overstated an open FUTURES card by
+                    // `leverage`x until the trade actually closed.
+                    const pnl = priceDiff * pos.quantity;
                     return (
                       <LivePositionChart
                         key={pos.id}

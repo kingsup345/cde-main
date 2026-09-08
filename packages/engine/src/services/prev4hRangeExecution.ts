@@ -32,6 +32,7 @@ import {
   reachedStop,
   reachedTarget,
   positionPnlPercent,
+  capStopLoss,
   TP1_EXIT_FRACTION,
   MAX_LOSS_PERCENT
 } from './exitPolicy';
@@ -119,6 +120,10 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
     // hand-written `live >= stop` is exactly where that gets inverted.
     const isLong = isLongSide(pos.side);
     const pnlPct = positionPnlPercent(pos.entryPrice, live, isLong);
+    // Hard 4.2% loss cap, re-applied every tick. A position opened before the
+    // signal-side cap existed (stored stop = range midpoint, which can sit
+    // past 4.2%) has its effective stop pulled in here — never loosened.
+    const effectiveStopLoss = capStopLoss(pos.entryPrice, pos.stopLoss, isLong);
     let reason = '';
 
     // TP1 closes half and lets the rest run to TP2 (operator decision
@@ -148,8 +153,8 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
 
     if (now >= barOpenFor(pos.openTimestamp) + BAR_MS) {
       reason = 'יציאה בסוף נר ה-4H (time stop)';
-    } else if (reachedStop(live, pos.stopLoss, isLong)) {
-      reason = `Stop Loss ב-${pos.stopLoss} (${pnlPct.toFixed(2)}%, תקרה ${MAX_LOSS_PERCENT}%)`;
+    } else if (reachedStop(live, effectiveStopLoss, isLong)) {
+      reason = `Stop Loss ב-${effectiveStopLoss} (${pnlPct.toFixed(2)}%, תקרה ${MAX_LOSS_PERCENT}%)`;
     } else if (tp2Reached) {
       reason = `TP2 הושג ב-${pos.takeProfit2} (+${pnlPct.toFixed(2)}%)`;
     } else if (pos.tp1Hit && tp1 && !reachedTarget(live, tp1, isLong)) {

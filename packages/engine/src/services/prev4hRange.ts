@@ -21,7 +21,7 @@ import { aggregateToH4 } from './pathEngine';
 import { barOpenFor, BAR_MS } from './pathStudy';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
-import { capStopLoss, stopWasCapped, cappedTakeProfitLevels, MAX_LOSS_PERCENT, TP1_PERCENT } from './exitPolicy';
+import { capStopLoss, stopWasCapped, takeProfitLevels, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
 
 // ── Parameters (all configurable — no auto-optimisation) ────────────────────
 
@@ -292,14 +292,15 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
   const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
   const riskPerUnit = Math.abs(entryRef - stopLoss);
-  // `H + range × tpRangeMult` stays this bot's target — capped at the shared 3%
-  // (TP2 at 4.5%). The cap only ever pulls the target CLOSER, so the RR 2.0 the
-  // range/midpoint pairing produces survives at every range width; replacing it
-  // outright would have made a 0.5%-range setup chase 12x its own stop.
-  const structuralTakeProfit = isLong ? H + range * p.tpRangeMult : L - range * p.tpRangeMult;
-  const { takeProfit1, takeProfit2 } = cappedTakeProfitLevels(entryRef, isLong, structuralTakeProfit);
+  // TP is the shared FLAT ladder: TP1 at exactly TP1_PERCENT (3%), TP2 at
+  // TP2_PERCENT (4.5%) (operator rule 2026-09-08: "profit minimum 3%"). This
+  // bot's own `H + range × tpRangeMult` target is no longer used — a narrow
+  // prev-4H range would otherwise let TP1 fire at +0.5%, below the 3% floor.
+  // The `minRR` gate below still rejects setups whose stop (range midpoint) is
+  // so wide that 3% is a sub-1.2 reward:risk.
+  const { takeProfit1, takeProfit2 } = takeProfitLevels(entryRef, isLong, TP1_PERCENT, TP2_PERCENT);
   const takeProfit = takeProfit1;
-  const tpCapped = Math.abs(structuralTakeProfit - entryRef) > Math.abs(takeProfit1 - entryRef) + 1e-12;
+  const tpCapped = false;
 
   // Gross R:R from actual levels (not the misleading ~2:1 claim).
   const grossReward = Math.abs(takeProfit - entryRef);
