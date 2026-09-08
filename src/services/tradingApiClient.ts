@@ -481,3 +481,83 @@ export async function clearBacktestArchive(configuredBaseUrl?: string): Promise<
   const res = await fetch(`${base}/api/public/backtest-archive/clear`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to clear archive: ${res.status} ${res.statusText}`);
 }
+
+// ── Public read-only board (/live) ──────────────────────────────────────────
+// One GET, no token, no state. Everything the shareable results page renders
+// is already derived server-side so the page cannot compute a number that
+// disagrees with what the bots themselves report.
+
+export interface PublicBotTrade {
+  id: string;
+  symbol: string;
+  type: 'SPOT' | 'FUTURES';
+  side: string;
+  price: number;
+  quantity: number;
+  usdValue: number;
+  fee: number;
+  timestamp: string;
+  at: number;
+  reason: string;
+  confidence: number;
+  pnl?: number;
+  pnlPercent?: number;
+}
+
+export interface PublicBotOpenPosition {
+  symbol: string;
+  type: 'SPOT' | 'FUTURES';
+  side: string;
+  quantity: number;
+  entryPrice: number;
+  currentPrice: number;
+  stopLoss: number;
+  takeProfit1?: number;
+  takeProfit2?: number;
+  tp1Hit: boolean;
+  notionalUsd: number;
+  openedAt: string;
+  openTimestamp: number;
+}
+
+export interface PublicBotSummary {
+  id: string;
+  label: string;
+  running: boolean;
+  hasData: boolean;
+  updatedAt?: number | null;
+  initialAmount?: number;
+  cash?: number;
+  positionsValue?: number;
+  equity?: number;
+  pnl?: number;
+  pnlPercent?: number;
+  realizedPnl?: number;
+  unrealizedPnl?: number;
+  openPositions?: number;
+  positionsOpened?: number;
+  positionsClosed?: number;
+  wins?: number;
+  losses?: number;
+  winRate?: number;
+  totalFees?: number;
+  totalSlippage?: number;
+  totalFunding?: number;
+  riskLevel?: string | null;
+  maxPositions?: number | null;
+  trades?: PublicBotTrade[];
+  openPositionsDetail?: PublicBotOpenPosition[];
+}
+
+export interface PublicBotsSummary {
+  bots: PublicBotSummary[];
+  serverTime: number;
+}
+
+export async function getPublicBotsSummary(configuredBaseUrl?: string): Promise<PublicBotsSummary> {
+  const base = resolveBaseUrl(configuredBaseUrl);
+  if (!base) throw new Error('כתובת Worker לא הוגדרה');
+  const res = await fetch(`${base}/api/public/bots-summary`);
+  if (!res.ok) throw new Error(`Failed to fetch board: ${res.status} ${res.statusText}`);
+  return (await res.json()) as PublicBotsSummary;
+}

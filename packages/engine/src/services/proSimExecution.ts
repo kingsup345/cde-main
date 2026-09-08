@@ -35,6 +35,7 @@ import type { Candle } from './tradeEngine';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import type { SimPosition, PendingOrder } from './simExecution';
 import { MIN_SIM_ENTRY_USD, MIN_ORDER_EXCEEDS_POSITION_TARGET, blockEntry } from './simExecution';
+import { isLongSide, TP1_EXIT_FRACTION, TP1_PERCENT, TP2_PERCENT, MAX_LOSS_PERCENT } from './exitPolicy';
 
 export const uid = (p: string) => `pro-${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -296,12 +297,21 @@ export function generateProOrders(ctx: ProOrderGenContext): PendingOrder[] {
       indicators: { rsi: 50, ma20: livePrice, volumeTrend: 'stable', bollingerBands: { upper: livePrice, middle: livePrice, lower: livePrice, position: 'between' }, volumeProfile: { poc: livePrice, valueAreaHigh: livePrice, valueAreaLow: livePrice, position: 'in_value_area' } }
     };
 
-    const exitCheck = evaluateProExit({ entryPrice: pos.entryPrice }, livePrice, effectiveSignal, minConfidence);
+    const exitCheck = evaluateProExit(
+      { entryPrice: pos.entryPrice, isLong: isLongSide(pos.side), tp1Hit: pos.tp1Hit },
+      livePrice,
+      effectiveSignal,
+      minConfidence
+    );
     if (!exitCheck.shouldExit) continue;
 
+    const partial = exitCheck.exitType === 'PARTIAL_50';
     newOrders.push({
-      id: uid(`${pos.symbol}-exit`), symbol: pos.symbol, positionId: pos.id, type: 'SPOT',
-      side: 'close_long', signalPrice: livePrice, quantity: pos.quantity, reason: exitCheck.reason,
+      id: uid(`${pos.symbol}-${partial ? 'tp1' : 'exit'}`), symbol: pos.symbol, positionId: pos.id, type: 'SPOT',
+      side: partial ? 'partial_tp1' : 'close_long',
+      signalPrice: livePrice,
+      quantity: partial ? pos.quantity * TP1_EXIT_FRACTION : pos.quantity,
+      reason: exitCheck.reason,
       confidence: pos.confidence ?? 0, executeAt: Date.now() + delayMs, createdAt: Date.now()
     } as PendingOrder);
   }

@@ -21,6 +21,7 @@ import { aggregateToH4 } from './pathEngine';
 import { barOpenFor, BAR_MS } from './pathStudy';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
+import { capStopLoss, stopWasCapped, cappedTakeProfitLevels, MAX_LOSS_PERCENT, TP1_PERCENT } from './exitPolicy';
 
 // ── Parameters (all configurable — no auto-optimisation) ────────────────────
 
@@ -143,6 +144,15 @@ export interface Prev4hRangePlan {
   stopLoss: number;
   takeProfit: number;
   riskPerUnit: number;
+  /** TP1 — the shared 3% level; half the position closes here. Same value as
+   *  `takeProfit`, kept under both names because the order generator and the
+   *  exit loop each read the one that matches their own vocabulary. */
+  takeProfit1: number;
+  /** TP2 — the shared 4.5% level the half left after TP1 runs to. */
+  takeProfit2: number;
+  /** True when the range midpoint would have risked more than MAX_LOSS_PERCENT
+   *  and the shared cap pulled the stop in. Telemetry for the panel. */
+  stopCapped: boolean;
   /** Where a LIMIT entry rests when the operator has limit entries on. A
    *  discount below market (above, for a short), floored just past the broken
    *  prev-4H level. Equals entryRef only when the breakout is too fresh to
@@ -271,9 +281,22 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   const limitEntryPrice = breakoutLimitPrice(
     entryRef, isLong, p.entryLimitOffsetRangeMult * range, isLong ? H : L, 0.02 * range
   );
-  const stopLoss = mid;
+  // The range midpoint is this strategy's own stop and stays the stop whenever
+  // it risks 4.2% or less. When the entry sits far enough above H that half the
+  // range is a bigger loss than that, the shared cap pulls it in (operator
+  // decision 2026-09-08) — the cap only ever REDUCES risk.
+  const structuralStop = mid;
+  const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
+  const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
   const riskPerUnit = Math.abs(entryRef - stopLoss);
-  const takeProfit = isLong ? H + range * p.tpRangeMult : L - range * p.tpRangeMult;
+  // `H + range × tpRangeMult` stays this bot's target — capped at the shared 3%
+  // (TP2 at 4.5%). The cap only ever pulls the target CLOSER, so the RR 2.0 the
+  // range/midpoint pairing produces survives at every range width; replacing it
+  // outright would have made a 0.5%-range setup chase 12x its own stop.
+  const structuralTakeProfit = isLong ? H + range * p.tpRangeMult : L - range * p.tpRangeMult;
+  const { takeProfit1, takeProfit2 } = cappedTakeProfitLevels(entryRef, isLong, structuralTakeProfit);
+  const takeProfit = takeProfit1;
+  const tpCapped = Math.abs(structuralTakeProfit - entryRef) > Math.abs(takeProfit1 - entryRef) + 1e-12;
 
   // Gross R:R from actual levels (not the misleading ~2:1 claim).
   const grossReward = Math.abs(takeProfit - entryRef);
@@ -311,7 +334,10 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
     entryRef,
     limitEntryPrice,
     stopLoss,
+    stopCapped,
     takeProfit,
+    takeProfit1,
+    takeProfit2,
     riskPerUnit,
     actualRR,
     confidence,
@@ -339,7 +365,7 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
     confidence,
     price: currentPrice,
     priceChange24h,
-    reasoning: `[SIGNAL] פריצת ${isLong ? 'הגבוה' : 'הנמוך'} של נר ה-4H הקודם (${isLong ? H : L}) בכיוון מגמת EMA20 · SL ${stopLoss.toFixed(6)} (אמצע הטווח) · TP ${takeProfit.toFixed(6)} · יציאה בסוף הנר`,
+    reasoning: `[SIGNAL] פריצת ${isLong ? 'הגבוה' : 'הנמוך'} של נר ה-4H הקודם (${isLong ? H : L}) בכיוון מגמת EMA20 · SL ${stopLoss.toFixed(6)} (${stopCapped ? `תקרת ${MAX_LOSS_PERCENT}%` : 'אמצע הטווח'}) · TP1 ${takeProfit1.toFixed(6)} (50%${tpCapped ? `, תקרת ${TP1_PERCENT}%` : ''}) · TP2 ${takeProfit2.toFixed(6)} · יציאה בסוף הנר`,
     status: `SIGNAL ${isLong ? 'SPOT LONG' : 'FUTURES SHORT'}`,
     willExecute: true,
     factors,
@@ -347,7 +373,8 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
     leverage: 1,
     stopLoss,
     takeProfit,
-    takeProfit1: takeProfit
+    takeProfit1,
+    takeProfit2
   };
   (ev as { prev4hRange?: Prev4hRangePlan }).prev4hRange = plan;
   ev.decision = plan as unknown as SignalEvaluation['decision'];

@@ -32,6 +32,13 @@ import {
   blockEntry as blockEntryShared
 } from './simExecution';
 import {
+  reachedStop,
+  reachedTarget,
+  positionPnlPercent,
+  TP1_EXIT_FRACTION,
+  MAX_LOSS_PERCENT
+} from './exitPolicy';
+import {
   isInStreakCooldown,
   streakCooldownFromHistory,
   ClosedTradeRecord
@@ -251,13 +258,45 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     const atrM15Now = currentAtrM15(set, p);
     const { stop, progressR } = effectiveStop(lt, live, atrM15Now, p);
 
+    const pnlPct = positionPnlPercent(first.entryPrice, live, isLong);
+    const tp2 = first.takeProfit2;
+    const tp2Reached = tp2 !== undefined && reachedTarget(live, tp2, isLong);
+
+    // TP1 closes half of EVERY lot in the logical trade and lets the rest run
+    // to TP2 (operator decision 2026-09-08). Checked before the full-exit
+    // branches, and skipped once price is already past TP2 — that is a full
+    // exit, not a partial. `tp1Hit` is tracked per lot by the fill core.
+    const tp1 = first.takeProfit1;
+    const unhitLots = lt.lots.filter((l) => !l.tp1Hit && !claimedPositionIds.has(l.id));
+    if (tp1 && !tp2Reached && reachedTarget(live, tp1, isLong) && unhitLots.length > 0) {
+      closingBaseSides.add(`${lt.base}|${lt.side}`);
+      for (const lot of unhitLots) {
+        newOrders.push({
+          id: uid(`${lt.base}-tp1`),
+          symbol: lt.base,
+          positionId: lot.id,
+          type: lot.type,
+          side: 'partial_tp1',
+          signalPrice: live,
+          quantity: lot.quantity * TP1_EXIT_FRACTION,
+          reason: `TP1 הושג ב-${tp1.toFixed(6)} (+${pnlPct.toFixed(2)}%) — סגירת ${(TP1_EXIT_FRACTION * 100).toFixed(0)}%`,
+          confidence: lot.confidence,
+          executeAt: now + delayMs,
+          createdAt: now
+        });
+      }
+      continue;
+    }
+
     let reason = '';
-    if (isLong ? live <= stop : live >= stop) {
+    if (reachedStop(live, stop, isLong)) {
       reason = progressR >= p.breakEvenR
         ? `Trailing/BE stop ב-${stop.toFixed(6)} (${progressR.toFixed(2)}R)`
-        : `Stop Loss ב-${stop.toFixed(6)}`;
-    } else if (tp && (isLong ? live >= tp : live <= tp)) {
-      reason = `Take Profit ב-${tp.toFixed(6)} (${p.tpRMultiplier}R)`;
+        : `Stop Loss ב-${stop.toFixed(6)} (${pnlPct.toFixed(2)}%, תקרה ${MAX_LOSS_PERCENT}%)`;
+    } else if (tp2Reached) {
+      reason = `TP2 הושג ב-${(tp2 as number).toFixed(6)} (+${pnlPct.toFixed(2)}%)`;
+    } else if (tp && !first.tp1Hit && reachedTarget(live, tp, isLong)) {
+      reason = `Take Profit ב-${tp.toFixed(6)} (+${pnlPct.toFixed(2)}%)`;
     } else {
       const stNow = currentH1Supertrend(set, p);
       if (stNow && (isLong ? stNow === 'BEAR' : stNow === 'BULL')) {
@@ -336,6 +375,8 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     price: number;
     stopLoss: number;
     takeProfit: number;
+    takeProfit1: number;
+    takeProfit2: number;
     confidence: number;
     reason: string;
     scaleLabel: string;
@@ -382,7 +423,8 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       fill: ctx.limitEntries ? 'limit' : 'market',
       stopLoss: opts.stopLoss,
       takeProfit: opts.takeProfit,
-      takeProfit1: opts.takeProfit,
+      takeProfit1: opts.takeProfit1,
+      takeProfit2: opts.takeProfit2,
       reason: `TrendBreakout ${opts.side} ${opts.scaleLabel} · ${opts.reason}`,
       confidence: opts.confidence,
       executeAt: now + delayMs,
@@ -444,7 +486,11 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       desiredNotional,
       price: live,
       stopLoss: first.stopLoss,
+      // A scale-in lot joins an existing logical trade, so it inherits that
+      // trade's ladder rather than deriving a new one from its own fill.
       takeProfit: first.takeProfit ?? first.takeProfit1 ?? live,
+      takeProfit1: first.takeProfit1 ?? first.takeProfit ?? live,
+      takeProfit2: first.takeProfit2 ?? first.takeProfit1 ?? live,
       confidence: first.confidence,
       reason: `scale ${lotCount + 1}/${p.scaleFractions.length} ב-${progressR.toFixed(2)}R`,
       scaleLabel: `scale ${lotCount + 1}/${p.scaleFractions.length}`
@@ -521,6 +567,8 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       price,
       stopLoss: plan.stopLoss,
       takeProfit: plan.takeProfit,
+      takeProfit1: plan.takeProfit1,
+      takeProfit2: plan.takeProfit2,
       confidence: ev.confidence,
       reason: `כניסה ראשונית · SL ${plan.stopLoss.toFixed(6)} TP ${plan.takeProfit.toFixed(6)}`,
       scaleLabel: `scale 1/${scaleFractions.length}`,

@@ -43,6 +43,7 @@ import {
   riskLevelToMaxPositions,
   SIM_BOTS,
   UI_FACING_SIM_PREFIXES,
+  SIM_BOT_SPECS,
   type SimEnvOverrides
 } from '@cde/engine/execution';
 import { getMultiTimeframeData, exportMarketDataCache, importMarketDataCache, TIMEFRAME_SPECS, TIMEFRAME_ORDER, type TimeframeCacheEntry } from '@cde/engine/market-data';
@@ -1529,6 +1530,119 @@ createServer(async (req: BotRequest, res: BotResponse) => {
       readArchivedRuns('bybit')
     ]);
     return json(res, 200, { intraday, pro, path, bybit });
+  }
+
+  // ── Public read-only board (/live) ────────────────────────────────────
+  //
+  // ONE endpoint, GET only, for the shareable results page. It exists instead
+  // of letting that page call the four /state routes because those return the
+  // bot's whole internal state — leader ids, heartbeats, pending orders, live
+  // evaluations — none of which a viewer needs and all of which would then have
+  // to stay shaped the way an external page expects. This returns exactly the
+  // numbers the board renders, already derived, so the page does no arithmetic
+  // that could disagree with the bots' own.
+  //
+  // Read-only by construction: it takes no parameters and touches no state.
+  if (req.method === 'GET' && url.pathname === '/api/public/bots-summary') {
+    // The four states have four different config types (each bot's own
+    // defaults), so they are narrowed here once rather than at every field.
+    type BoardSource = {
+      running: boolean;
+      updatedAt: number;
+      snapshot: SimSnapshot | null;
+      config: { initialAmount?: number; riskLevel?: string; maxPositions?: number };
+    };
+    const sources: Record<string, BoardSource> = {
+      intraday: simState as unknown as BoardSource,
+      pro: proSimState as unknown as BoardSource,
+      path: pathSimState as unknown as BoardSource,
+      bybit: bybitSimState as unknown as BoardSource
+    };
+
+    const board = SIM_BOT_SPECS.map((spec) => {
+      const entry = sources[spec.id];
+      const snap = entry?.snapshot ?? null;
+      const cfg = entry?.config ?? {};
+
+      if (!snap) {
+        return {
+          id: spec.id,
+          label: spec.label,
+          running: !!entry?.running,
+          hasData: false
+        };
+      }
+
+      // The run's OWN starting capital — never a shared constant. Each bot is
+      // configured separately and a cross-bot comparison on a fixed $10,000
+      // baseline is what once reported a flat -90% for all four.
+      const initialAmount = snap.initialAmount ?? cfg.initialAmount ?? 0;
+      const positions = snap.positions ?? [];
+      const trades = snap.trades ?? [];
+
+      const positionsValue = positions.reduce((sum, pos) => {
+        const live = pos.currentPrice || pos.entryPrice;
+        if (pos.type === 'SPOT') return sum + pos.quantity * live;
+        const pnl = pos.side === 'SHORT' || pos.side === 'SELL'
+          ? (pos.entryPrice - live) * pos.quantity
+          : (live - pos.entryPrice) * pos.quantity;
+        return sum + pos.marginUsd + pnl;
+      }, 0);
+      const equity = (snap.cash ?? 0) + positionsValue;
+
+      // Closed trades are the ones carrying realised pnl; entries carry none.
+      const closed = trades.filter((t) => typeof t.pnl === 'number');
+      const wins = closed.filter((t) => (t.pnl as number) > 0).length;
+      const realizedPnl = closed.reduce((sum, t) => sum + (t.pnl as number), 0);
+      const entries = trades.filter((t) => t.side === 'buy' || t.side === 'long' || t.side === 'short');
+
+      return {
+        id: spec.id,
+        label: spec.label,
+        running: !!entry?.running,
+        hasData: true,
+        updatedAt: entry?.updatedAt ?? null,
+        initialAmount,
+        cash: snap.cash ?? 0,
+        positionsValue,
+        equity,
+        pnl: equity - initialAmount,
+        pnlPercent: initialAmount > 0 ? ((equity - initialAmount) / initialAmount) * 100 : 0,
+        realizedPnl,
+        unrealizedPnl: equity - initialAmount - realizedPnl,
+        openPositions: positions.length,
+        positionsOpened: entries.length,
+        positionsClosed: closed.length,
+        wins,
+        losses: closed.length - wins,
+        winRate: closed.length > 0 ? (wins / closed.length) * 100 : 0,
+        totalFees: snap.totalFees ?? 0,
+        totalSlippage: snap.totalSlippageCost ?? 0,
+        totalFunding: snap.totalFunding ?? 0,
+        riskLevel: cfg.riskLevel ?? null,
+        maxPositions: cfg.maxPositions ?? null,
+        // Newest first, capped: the detail table is for reading, not for
+        // shipping an unbounded history to every viewer on every poll.
+        trades: trades.slice(0, 200),
+        openPositionsDetail: positions.map((pos) => ({
+          symbol: pos.symbol,
+          type: pos.type,
+          side: pos.side,
+          quantity: pos.quantity,
+          entryPrice: pos.entryPrice,
+          currentPrice: pos.currentPrice,
+          stopLoss: pos.stopLoss,
+          takeProfit1: pos.takeProfit1,
+          takeProfit2: pos.takeProfit2,
+          tp1Hit: !!pos.tp1Hit,
+          notionalUsd: pos.notionalUsd,
+          openedAt: pos.openedAt,
+          openTimestamp: pos.openTimestamp
+        }))
+      };
+    });
+
+    return json(res, 200, { bots: board, serverTime: Date.now() });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/public/backtest-archive/clear') {

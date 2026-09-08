@@ -19,6 +19,7 @@ import SimulationBot from "./pages/SimulationBot";
 import RealTradingBot from "./pages/RealTradingBot";
 import AdvancedAnalysis from "./pages/AdvancedAnalysis";
 import BacktestResults from "./pages/BacktestResults";
+import LiveBoard from './pages/LiveBoard';
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -61,6 +62,12 @@ const App = () => {
                 <Route path="/real-trading" element={<RealTradingBot />} />
                 <Route path="/advanced-analysis" element={<AdvancedAnalysis />} />
                 <Route path="/backtest-results" element={<BacktestResults />} />
+                {/* Public, read-only, shareable. Rendered inside the provider
+                    tree only because it lives in the same Routes block — the
+                    page itself consumes none of those contexts and calls one
+                    parameterless GET, so there is nothing on it that can change
+                    state. See src/pages/LiveBoard.tsx. */}
+                <Route path="/live" element={<LiveBoard />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
               </BybitSimulationBotProvider>

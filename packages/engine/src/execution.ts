@@ -24,6 +24,23 @@ export {
   calculateBreakEvenPrice
 } from './services/tradeEngine';
 
+// ── Shared exit policy: 4.2% loss cap, TP1 3% (50% out), TP2 4.5% ───────────
+export {
+  MAX_LOSS_PERCENT,
+  TP1_PERCENT,
+  TP2_PERCENT,
+  TP1_EXIT_FRACTION,
+  positionPnlPercent,
+  maxLossStopLevel,
+  capStopLoss,
+  stopWasCapped,
+  takeProfitLevels,
+  cappedTakeProfitLevels,
+  reachedTarget,
+  reachedStop,
+  isLongSide
+} from './services/exitPolicy';
+
 // ── Simulation defaults, shared by the worker and the browser ─────────────
 export {
   SIM_BOTS,

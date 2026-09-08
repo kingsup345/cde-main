@@ -22,6 +22,7 @@ import {
 } from './tradeEngine';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
+import { capStopLoss, stopWasCapped, cappedTakeProfitLevels, MAX_LOSS_PERCENT } from './exitPolicy';
 
 // ── Parameters (spec §23 — every knob configurable, no auto-optimisation) ────
 
@@ -169,6 +170,13 @@ export interface TrendBreakoutPlan {
   takeProfit: number;
   /** R in price units: |entryRef - stopLoss|. */
   riskPerUnit: number;
+  /** TP1 — the shared 3% level; half the position closes here. */
+  takeProfit1: number;
+  /** TP2 — the shared 4.5% level the remaining half runs to. */
+  takeProfit2: number;
+  /** True when 1.5×ATR would have risked more than MAX_LOSS_PERCENT and the
+   *  shared cap pulled the stop in. Telemetry for the panel. */
+  stopCapped: boolean;
   /** Where a LIMIT entry rests when the operator has limit entries on. A
    *  discount below market (above, for a short), floored just past the broken
    *  Donchian level. Equals entryRef only when the breakout is too fresh to
@@ -331,9 +339,22 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
   const limitEntryPrice = breakoutLimitPrice(
     entryRef, isLong, p.entryLimitOffsetAtrMult * atrM5, brokeLevel, 0.02 * atrM5
   );
+  // The ATR stop is this strategy's own and stays the stop whenever it risks
+  // 4.2% or less. A wide-ATR symbol whose 1.5×ATR(M15) would have risked more
+  // gets pulled in by the shared cap (operator decision 2026-09-08); the cap
+  // only ever REDUCES risk, so a tight-ATR stop is untouched.
   const rUnit = p.slAtrMultiplier * atrM15;
-  const stopLoss = isLong ? entryRef - rUnit : entryRef + rUnit;
-  const takeProfit = isLong ? entryRef + rUnit * p.tpRMultiplier : entryRef - rUnit * p.tpRMultiplier;
+  const structuralStop = isLong ? entryRef - rUnit : entryRef + rUnit;
+  const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
+  const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
+  // 2R stays this bot's target — capped at the shared 3% (TP2 at 4.5%). The cap
+  // only ever pulls the target CLOSER, so a tight-ATR symbol keeps the 2R
+  // geometry the confidence score and the trailing logic reason in.
+  const structuralTakeProfit = isLong
+    ? entryRef + rUnit * p.tpRMultiplier
+    : entryRef - rUnit * p.tpRMultiplier;
+  const { takeProfit1, takeProfit2 } = cappedTakeProfitLevels(entryRef, isLong, structuralTakeProfit);
+  const takeProfit = takeProfit1;
 
   // ── §7 confidence score (0-100, weights sum to 100) ────────────────────
   const c = computeConfidence(direction, {
@@ -362,7 +383,10 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
     ema9M5: ema9,
     ema21M5: ema21,
     stopLoss,
+    stopCapped,
     takeProfit,
+    takeProfit1,
+    takeProfit2,
     riskPerUnit: Math.abs(entryRef - stopLoss),
     confidence,
     components: c.components
@@ -402,7 +426,8 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
     leverage: isLong ? 1 : 1,
     stopLoss,
     takeProfit,
-    takeProfit1: takeProfit,
+    takeProfit1,
+    takeProfit2,
     regime: undefined
   };
   (ev as { trendBreakout?: TrendBreakoutPlan }).trendBreakout = plan;

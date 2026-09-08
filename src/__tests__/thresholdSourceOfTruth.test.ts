@@ -21,6 +21,7 @@ import {
   type ProSignalResult
 } from '@cde/engine/analysis';
 import type { Candle, SignalEvaluation } from '@cde/engine';
+import { TP2_PERCENT } from '@cde/engine/execution';
 
 // Three §3/§4/§5 contracts, all of the same family — a number with two
 // definitions that could disagree. This file used to test the PREVIOUS Pro
@@ -292,10 +293,64 @@ describe('§5 — fixed-percentage exits, independent of the recommendation', ()
     expect(d.reason).toContain('Stop Loss');
   });
 
-  it(`closes at +${PRO_TAKE_PROFIT_PERCENT}% — "Take Profit"`, () => {
+  it(`takes a PARTIAL at +${PRO_TAKE_PROFIT_PERCENT}% — TP1, half out (2026-09-08)`, () => {
+    // Was a full close at 3%. The operator's ladder banks half here and lets
+    // the rest run to TP2 at 4.5%.
     const d = evaluateProExit({ entryPrice: 100 }, 100 + PRO_TAKE_PROFIT_PERCENT, stubSignal('BUY', 90), minConfidence);
     expect(d.shouldExit).toBe(true);
-    expect(d.reason).toContain('Take Profit');
+    expect(d.exitType).toBe('PARTIAL_50');
+    expect(d.reason).toContain('TP1');
+  });
+
+  it(`closes fully at +${TP2_PERCENT}% — TP2`, () => {
+    const d = evaluateProExit({ entryPrice: 100 }, 100 + TP2_PERCENT, stubSignal('BUY', 90), minConfidence);
+    expect(d.shouldExit).toBe(true);
+    expect(d.exitType).toBe('FULL');
+    expect(d.reason).toContain('TP2');
+  });
+
+  it('does not take the partial twice — tp1Hit holds it', () => {
+    const d = evaluateProExit(
+      { entryPrice: 100, tp1Hit: true },
+      100 + PRO_TAKE_PROFIT_PERCENT + 0.5,
+      stubSignal('BUY', 90),
+      minConfidence
+    );
+    expect(d.exitType).not.toBe('PARTIAL_50');
+    expect(d.shouldExit).toBe(false);
+  });
+
+  it('banks the runner if it gives TP1 back', () => {
+    const d = evaluateProExit(
+      { entryPrice: 100, tp1Hit: true },
+      100 + PRO_TAKE_PROFIT_PERCENT - 0.5,
+      stubSignal('BUY', 90),
+      minConfidence
+    );
+    expect(d.shouldExit).toBe(true);
+    expect(d.exitType).toBe('FULL');
+  });
+
+  it('a SHORT is measured with the short formula, not the long one', () => {
+    // Price DOWN from entry is a profit for a short. Under the old inline
+    // `(current - entry) / entry` this read as -3% and tripped the stop.
+    const win = evaluateProExit(
+      { entryPrice: 100, isLong: false },
+      100 - PRO_TAKE_PROFIT_PERCENT,
+      stubSignal('BUY', 90),
+      minConfidence
+    );
+    expect(win.exitType).toBe('PARTIAL_50');
+    expect(win.reason).toContain('TP1');
+
+    const loss = evaluateProExit(
+      { entryPrice: 100, isLong: false },
+      100 + PRO_STOP_LOSS_PERCENT,
+      stubSignal('BUY', 90),
+      minConfidence
+    );
+    expect(loss.exitType).toBe('FULL');
+    expect(loss.reason).toContain('Stop Loss');
   });
 
   it('holds inside the band even while the recommendation is still buy', () => {

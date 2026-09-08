@@ -27,6 +27,7 @@ import {
 } from './intradayBridge';
 import { DEFAULT_INTRADAY_PARAMS, IntradayParams, SetupType, POSITION_TARGET_PCT, PER_ASSET_EXPOSURE_CAP_PERCENT, MAX_TOTAL_EXPOSURE_PERCENT, CAPITAL_FLOOR_PCT, resolveSizingBase, isBelowCapitalFloor } from './intradayParams';
 import { validateExposureModel } from './simDefaults';
+import { TP1_EXIT_FRACTION } from './exitPolicy';
 import {
   evaluateCorrelationGate,
   toPositionDirection,
@@ -1091,43 +1092,65 @@ export function fillDueOrders(due: PendingOrder[], cash: number, positions: SimP
           `זמן: ${now}`
       });
     } else if (order.side === 'partial_tp1') {
-      const posIdx = workingPositions.findIndex((p) => (order.positionId ? p.id === order.positionId : p.symbol === order.symbol) && p.type === 'FUTURES');
+      // Type-aware since 2026-09-08. This lookup used to require
+      // `p.type === 'FUTURES'`, so a partial TP1 on a SPOT position matched
+      // nothing and the order was silently dropped — intraday has emitted
+      // PARTIAL_50 orders for spot longs all along and none of them ever
+      // executed. Spot longs are the majority of what these bots open.
+      const posIdx = workingPositions.findIndex((p) => (order.positionId ? p.id === order.positionId : p.symbol === order.symbol));
       if (posIdx >= 0) {
         const pos = workingPositions[posIdx];
-        const closeQty = pos.quantity * 0.5;
+        const isSpot = pos.type === 'SPOT';
+        const closeQty = pos.quantity * TP1_EXIT_FRACTION;
+        const remainingFraction = 1 - TP1_EXIT_FRACTION;
         const notional = closeQty * fillPrice;
-        const fee = calculateTradingFee(notional, 'FUTURES', true, costs.feePercent);
-        const pnl = pos.side === 'LONG'
-          ? (fillPrice - pos.entryPrice) * closeQty
-          : (pos.entryPrice - fillPrice) * closeQty;
+        const fee = calculateTradingFee(notional, pos.type, true, costs.feePercent);
 
-        workingCash += pos.marginUsd * 0.5 + pnl - fee;
+        // Spot sells coins for cash; futures releases the matching share of
+        // margin and settles the pnl. Same shapes the full-close branch uses.
+        let pnl: number;
+        if (isSpot) {
+          const netProceeds = notional - fee;
+          const costBasis = closeQty * pos.avgPrice;
+          pnl = netProceeds - costBasis - pos.entryFee * TP1_EXIT_FRACTION;
+          workingCash += netProceeds;
+        } else {
+          pnl = pos.side === 'LONG'
+            ? (fillPrice - pos.entryPrice) * closeQty
+            : (pos.entryPrice - fillPrice) * closeQty;
+          workingCash += pos.marginUsd * TP1_EXIT_FRACTION + pnl - fee;
+        }
+
         feesAdded += fee;
         slipAdded += Math.abs(fillPrice - market) * closeQty;
 
         workingPositions[posIdx] = {
           ...pos,
           quantity: pos.quantity - closeQty,
-          marginUsd: pos.marginUsd * 0.5,
+          marginUsd: pos.marginUsd * remainingFraction,
           notionalUsd: (pos.quantity - closeQty) * fillPrice,
+          // The entry fee of the part just sold has been charged against this
+          // partial's pnl; leaving it whole would charge it a second time when
+          // the remainder closes.
+          entryFee: pos.entryFee * remainingFraction,
           tp1Hit: true,
           highestPriceSinceTP1: fillPrice,
           lowestPriceSinceTP1: fillPrice,
-          // The remainder was opened against half the original risk. Without
-          // halving here, the eventual full close would divide the remaining
-          // half's pnl by the whole position's risk and understate its R.
-          initialRiskUsd: pos.initialRiskUsd !== undefined ? pos.initialRiskUsd / 2 : undefined
+          // The remainder was opened against a proportional share of the
+          // original risk. Without scaling here, the eventual full close would
+          // divide the remainder's pnl by the whole position's risk and
+          // understate its R.
+          initialRiskUsd: pos.initialRiskUsd !== undefined ? pos.initialRiskUsd * remainingFraction : undefined
         };
 
-        const partialPnlPercent = (pnl / (pos.marginUsd * 0.5)) * 100;
+        const partialBasis = isSpot ? closeQty * pos.avgPrice : pos.marginUsd * TP1_EXIT_FRACTION;
+        const partialPnlPercent = partialBasis > 0 ? (pnl / partialBasis) * 100 : 0;
         newTrades.push({
-          id: order.id, symbol: order.symbol, type: 'FUTURES', side: 'partial_tp1',
+          id: order.id, symbol: order.symbol, type: pos.type, side: 'partial_tp1',
           price: fillPrice, requestedPrice: order.signalPrice, slippagePercent, fee, delayMs,
           quantity: closeQty, usdValue: notional, leverage: pos.leverage, timestamp: now, at: Date.now(),
           reason: order.reason, confidence: order.confidence, pnl, pnlPercent: partialPnlPercent,
-          // Half the position closed, so half the risk it was opened against —
-          // matching how pnl above is already the half-position's pnl.
-          riskUsd: pos.initialRiskUsd !== undefined ? pos.initialRiskUsd / 2 : undefined
+          riskUsd: pos.initialRiskUsd !== undefined ? pos.initialRiskUsd * TP1_EXIT_FRACTION : undefined
         });
 
         events.push({

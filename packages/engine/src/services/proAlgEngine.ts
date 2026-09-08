@@ -77,6 +77,7 @@ import {
 } from '../utils/technicalAnalysis';
 import { calculateMACD, calculateStochastic } from '../utils/advancedTechnicalAnalysis';
 import type { HistoricalPrice, TechnicalIndicators } from '../types/crypto';
+import { positionPnlPercent, TP2_PERCENT, TP1_EXIT_FRACTION } from './exitPolicy';
 
 // ── §2 — indicator votes ─────────────────────────────────────────────────────
 
@@ -454,6 +455,8 @@ export function proAllocationPercent(_confidence: number): number {
 
 // ── §5 — fixed exit percentages ──────────────────────────────────────────────
 
+// TP2 and the partial fraction come from the shared exit policy so all four
+// bots ladder out the same way; §5's own two numbers stay defined here.
 /** §5, literally: "Take Profit 3%, Stop Loss 4.2%". Not ATR-scaled. */
 export const PRO_TAKE_PROFIT_PERCENT = 3;
 export const PRO_STOP_LOSS_PERCENT = 4.2;
@@ -469,10 +472,19 @@ export const MIN_PRO_CANDLES = 40;
 
 export interface ProPositionView {
   entryPrice: number;
+  /** LONG for every position this bot opens today (spot cannot short), but
+   *  passed explicitly so the pnl below is never the long-only formula by
+   *  accident — see positionPnlPercent. */
+  isLong?: boolean;
+  /** Set once TP1 has taken its half; the remainder then runs to TP2. */
+  tp1Hit?: boolean;
 }
 
 export interface ProExitDecision {
   shouldExit: boolean;
+  /** PARTIAL_50 closes TP1_EXIT_FRACTION of the position and leaves the rest
+   *  running; FULL closes what is left. */
+  exitType?: 'FULL' | 'PARTIAL_50';
   reason: string;
 }
 
@@ -487,16 +499,33 @@ export function evaluateProExit(
   currentSignal: ProSignalResult,
   minConfidence: number
 ): ProExitDecision {
-  const changePercent = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+  const isLong = pos.isLong ?? true;
+  // Was `(current - entry) / entry` inline — the LONG formula. Correct for this
+  // bot today (spot never shorts) but wrong the moment it isn't, and wrong by
+  // sign rather than by magnitude: a winning short would have read as a loss
+  // and tripped the stop. The shared helper is symmetric by construction.
+  const changePercent = positionPnlPercent(pos.entryPrice, currentPrice, isLong);
 
   if (changePercent <= -PRO_STOP_LOSS_PERCENT) {
-    return { shouldExit: true, reason: `Stop Loss: שינוי ${changePercent.toFixed(2)}% <= -${PRO_STOP_LOSS_PERCENT}%` };
+    return { shouldExit: true, exitType: 'FULL', reason: `Stop Loss: שינוי ${changePercent.toFixed(2)}% <= -${PRO_STOP_LOSS_PERCENT}%` };
   }
-  if (changePercent >= PRO_TAKE_PROFIT_PERCENT) {
-    return { shouldExit: true, reason: `Take Profit: שינוי ${changePercent.toFixed(2)}% >= ${PRO_TAKE_PROFIT_PERCENT}%` };
+  // TP2 first: past it, there is nothing left to leave running.
+  if (changePercent >= TP2_PERCENT) {
+    return { shouldExit: true, exitType: 'FULL', reason: `TP2: שינוי ${changePercent.toFixed(2)}% >= ${TP2_PERCENT}%` };
+  }
+  if (!pos.tp1Hit && changePercent >= PRO_TAKE_PROFIT_PERCENT) {
+    return {
+      shouldExit: true,
+      exitType: 'PARTIAL_50',
+      reason: `TP1: שינוי ${changePercent.toFixed(2)}% >= ${PRO_TAKE_PROFIT_PERCENT}% — סגירת ${(TP1_EXIT_FRACTION * 100).toFixed(0)}%`
+    };
+  }
+  // The runner gave TP1 back — bank the remainder rather than round-trip it.
+  if (pos.tp1Hit && changePercent < PRO_TAKE_PROFIT_PERCENT) {
+    return { shouldExit: true, exitType: 'FULL', reason: `חזרה מתחת ל-TP1 אחרי יציאה חלקית (${changePercent.toFixed(2)}%)` };
   }
   if (currentSignal.action === 'SELL' && currentSignal.confidence >= minConfidence) {
-    return { shouldExit: true, reason: `היפוך אות: SELL בביטחון ${currentSignal.confidence.toFixed(1)} >= ${minConfidence}` };
+    return { shouldExit: true, exitType: 'FULL', reason: `היפוך אות: SELL בביטחון ${currentSignal.confidence.toFixed(1)} >= ${minConfidence}` };
   }
   return { shouldExit: false, reason: '' };
 }

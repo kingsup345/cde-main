@@ -28,6 +28,14 @@ import {
   blockEntry
 } from './simExecution';
 import {
+  isLongSide,
+  reachedStop,
+  reachedTarget,
+  positionPnlPercent,
+  TP1_EXIT_FRACTION,
+  MAX_LOSS_PERCENT
+} from './exitPolicy';
+import {
   DAILY_DRAWDOWN_BLOCK_PERCENT,
   WEEKLY_DRAWDOWN_LOCK_PERCENT,
   PER_ASSET_EXPOSURE_CAP_PERCENT,
@@ -106,15 +114,47 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
   for (const pos of ctx.positions) {
     if (claimed.has(pos.id)) continue;
     const live = ctx.priceFor(pos.symbol) ?? pos.currentPrice ?? pos.entryPrice;
-    const isLong = pos.side === 'LONG' || pos.side === 'BUY';
+    // One helper for the side, and every comparison below goes through the
+    // direction-aware predicates. This bot opens SHORTs as 1x futures, and a
+    // hand-written `live >= stop` is exactly where that gets inverted.
+    const isLong = isLongSide(pos.side);
+    const pnlPct = positionPnlPercent(pos.entryPrice, live, isLong);
     let reason = '';
+
+    // TP1 closes half and lets the rest run to TP2 (operator decision
+    // 2026-09-08). Checked before the full-exit branches so a position that
+    // reaches TP1 takes its partial rather than being closed whole.
+    const tp1 = pos.takeProfit1;
+    // `?? Infinity` would have inverted this for a SHORT (live <= Infinity is
+    // always true) — an absent TP2 means "not reached", never "reached".
+    const tp2Reached = pos.takeProfit2 !== undefined && reachedTarget(live, pos.takeProfit2, isLong);
+    if (!pos.tp1Hit && tp1 && reachedTarget(live, tp1, isLong) && !tp2Reached) {
+      closingSymbols.add(pos.symbol);
+      newOrders.push({
+        id: uid(`${pos.symbol}-tp1`),
+        symbol: pos.symbol,
+        positionId: pos.id,
+        type: pos.type,
+        side: 'partial_tp1',
+        signalPrice: live,
+        quantity: pos.quantity * TP1_EXIT_FRACTION,
+        reason: `TP1 הושג ב-${tp1} (+${pnlPct.toFixed(2)}%) — סגירת ${(TP1_EXIT_FRACTION * 100).toFixed(0)}%`,
+        confidence: pos.confidence,
+        executeAt: now + delayMs,
+        createdAt: now
+      });
+      continue;
+    }
 
     if (now >= barOpenFor(pos.openTimestamp) + BAR_MS) {
       reason = 'יציאה בסוף נר ה-4H (time stop)';
-    } else if (isLong ? live <= pos.stopLoss : live >= pos.stopLoss) {
-      reason = `Stop Loss ב-${pos.stopLoss} (אמצע הטווח)`;
-    } else if (pos.takeProfit && (isLong ? live >= pos.takeProfit : live <= pos.takeProfit)) {
-      reason = `Take Profit ב-${pos.takeProfit}`;
+    } else if (reachedStop(live, pos.stopLoss, isLong)) {
+      reason = `Stop Loss ב-${pos.stopLoss} (${pnlPct.toFixed(2)}%, תקרה ${MAX_LOSS_PERCENT}%)`;
+    } else if (tp2Reached) {
+      reason = `TP2 הושג ב-${pos.takeProfit2} (+${pnlPct.toFixed(2)}%)`;
+    } else if (pos.tp1Hit && tp1 && !reachedTarget(live, tp1, isLong)) {
+      // The runner gave back TP1 — bank what is left rather than round-trip it.
+      reason = `חזרה מתחת ל-TP1 אחרי יציאה חלקית (+${pnlPct.toFixed(2)}%)`;
     } else {
       const trend = h4EmaTrend(ctx.candlesBySymbol[pos.symbol]?.h1, p.emaPeriod);
       // Close only on an outright REVERSAL (trend now points the other way),
@@ -277,7 +317,8 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
       fill: ctx.limitEntries ? 'limit' : 'market',
       stopLoss: plan.stopLoss,
       takeProfit: plan.takeProfit,
-      takeProfit1: plan.takeProfit,
+      takeProfit1: plan.takeProfit1,
+      takeProfit2: plan.takeProfit2,
       reason: ev.reasoning,
       confidence: ev.confidence,
       executeAt: now + delayMs,
