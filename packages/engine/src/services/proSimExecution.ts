@@ -24,7 +24,6 @@ import {
   evaluateProExit,
   proMinConfidence,
   proTechnicalScore,
-  proAllocationPercent,
   calculateOptimalEntryPrice,
   MIN_PRO_CANDLES,
   type ProSignalResult,

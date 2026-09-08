@@ -137,17 +137,18 @@ function voteRsi(rsi: number, signals: ProIndicatorSignal[]): void {
   else pushVote(signals, 'RSI(14)', w, 'HOLD', 70, `RSI ניטרלי (${rsi.toFixed(1)})`);
 }
 
-// MA(20) — no precedent in this codebase for a bare price-vs-MA signal; the
-// ±2% band and the two-tier confidence are a SUGGESTED STARTING VALUE mirroring
-// the RSI/Bollinger convention already used below, not a measured threshold.
+// MA(20) — price vs. MA as mean-reversion: far above = overbought (SELL),
+// far below = oversold (BUY). The ±2% band and the two-tier confidence are a
+// SUGGESTED STARTING VALUE mirroring the RSI/Bollinger convention already used
+// below, not a measured threshold.
 function voteMa(currentPrice: number, ma20: number, signals: ProIndicatorSignal[]): void {
   const w = PRO_INDICATOR_WEIGHTS.MA;
   if (!(ma20 > 0)) { pushVote(signals, 'MA(20)', w, 'HOLD', 50, 'אין מספיק היסטוריה לממוצע נע 20'); return; }
   const distPct = ((currentPrice - ma20) / ma20) * 100;
-  if (distPct > 2) pushVote(signals, 'MA(20)', w, 'BUY', 80, `מחיר ${distPct.toFixed(1)}% מעל MA20 ($${formatDynamicPrice(ma20)})`);
-  else if (distPct > 0.1) pushVote(signals, 'MA(20)', w, 'BUY', 60, `מחיר מעל MA20 (${distPct.toFixed(1)}%)`);
-  else if (distPct < -2) pushVote(signals, 'MA(20)', w, 'SELL', 80, `מחיר ${Math.abs(distPct).toFixed(1)}% מתחת ל-MA20 ($${formatDynamicPrice(ma20)})`);
-  else if (distPct < -0.1) pushVote(signals, 'MA(20)', w, 'SELL', 60, `מחיר מתחת ל-MA20 (${Math.abs(distPct).toFixed(1)}%)`);
+  if (distPct < -2) pushVote(signals, 'MA(20)', w, 'BUY', 80, `מחיר ${Math.abs(distPct).toFixed(1)}% מתחת ל-MA20 ($${formatDynamicPrice(ma20)}) — oversold`);
+  else if (distPct < -0.1) pushVote(signals, 'MA(20)', w, 'BUY', 60, `מחיר מתחת ל-MA20 (${Math.abs(distPct).toFixed(1)}%) —轻度 oversold`);
+  else if (distPct > 2) pushVote(signals, 'MA(20)', w, 'SELL', 80, `מחיר ${distPct.toFixed(1)}% מעל MA20 ($${formatDynamicPrice(ma20)}) — overbought`);
+  else if (distPct > 0.1) pushVote(signals, 'MA(20)', w, 'SELL', 60, `מחיר מעל MA20 (${distPct.toFixed(1)}%) —轻度 overbought`);
   else pushVote(signals, 'MA(20)', w, 'HOLD', 70, 'מחיר צמוד ל-MA20');
 }
 
@@ -305,9 +306,10 @@ export function computeProSignal(
   holdScore = Number(holdScore.toFixed(2));
 
   const maxScore = Math.max(buyScore, sellScore, holdScore);
-  // Tie-break not specified by §2: HOLD wins a draw, as the safer default.
+  // BUY wins a draw with HOLD so a signal that ties the neutral bucket is
+  // allowed through — a HOLD tie is not "safer", it is an unexpressed BUY.
   const action: 'BUY' | 'SELL' | 'HOLD' =
-    maxScore === holdScore ? 'HOLD' : maxScore === buyScore ? 'BUY' : 'SELL';
+    maxScore === buyScore ? 'BUY' : maxScore === sellScore ? 'SELL' : 'HOLD';
 
   const secondScore = [buyScore, sellScore, holdScore].sort((a, b) => b - a)[1] ?? 0;
   const dominance = totalWeight > 0 ? maxScore / totalWeight : 0;
@@ -403,7 +405,13 @@ export function calculateOptimalEntryPrice(signal: ProSignalResult, currentPrice
   // support-weighted level to whichever of {0.01, 0.02, 0.03} it landed
   // nearest, on the wrong side of the market often enough that the resting
   // LIMIT order never crossed.
-  return roundToPriceScale(Math.min(currentPrice, Math.max(currentPrice * 0.90, weightedPrice)));
+  const capped = Math.min(currentPrice, Math.max(currentPrice * 0.90, weightedPrice));
+  // LIMIT orders for LONG must sit BELOW current price — otherwise they fill
+  // immediately as market orders, defeating the purpose of resting.
+  const limitPrice = signal.action === 'BUY'
+    ? Math.min(capped, currentPrice * 0.999)
+    : Math.max(capped, currentPrice * 1.001);
+  return roundToPriceScale(limitPrice);
 }
 
 // ── §3 — risk-level thresholds ───────────────────────────────────────────────
@@ -425,10 +433,10 @@ export const PRO_CONFIDENCE_BY_RISK: Record<ProRiskLevel, number> = { low: 55, m
  */
 export const PRO_DEFAULT_ENTRY_CONFIDENCE = 70;
 
-/** §3: `minConfidenceOverride > 0 ? minConfidenceOverride : 70`. */
+/** §3: `minConfidenceOverride > 0 ? minConfidenceOverride : PRO_CONFIDENCE_BY_RISK[riskLevel]`. */
 export function proMinConfidence(riskLevel: ProRiskLevel, override?: number): number {
-  void riskLevel; // the flat operator default applies across risk levels
-  return typeof override === 'number' && override > 0 ? override : PRO_DEFAULT_ENTRY_CONFIDENCE;
+  if (typeof override === 'number' && override > 0) return override;
+  return PRO_CONFIDENCE_BY_RISK[riskLevel] ?? PRO_DEFAULT_ENTRY_CONFIDENCE;
 }
 
 /**
@@ -447,12 +455,6 @@ export const PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD = 80;
 export const PRO_ALLOCATION_DEFAULT_PERCENT = 0.10;
 export const PRO_ALLOCATION_HIGH_PERCENT = 0.10;
 
-/** §4 gate 7: confidence does NOT affect allocation anymore — every new
- *  position targets 10% of equity, regardless of confidence score. */
-export function proAllocationPercent(_confidence: number): number {
-  return PRO_ALLOCATION_DEFAULT_PERCENT;
-}
-
 // ── §5 — fixed exit percentages ──────────────────────────────────────────────
 
 // TP2 and the partial fraction come from the shared exit policy so all four
@@ -466,7 +468,7 @@ export const PRO_STOP_LOSS_PERCENT = 4.2;
 /** Candles needed before every indicator above can compute (MACD's 26+9 is
  *  the longest). Not part of §2 — alg.md does not state a warm-up
  *  requirement, this is purely "how much history the math needs". */
-export const MIN_PRO_CANDLES = 40;
+export const MIN_PRO_CANDLES = 20;
 
 // ── §4/§5 — position-level exit ──────────────────────────────────────────────
 

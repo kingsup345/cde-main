@@ -159,8 +159,8 @@ describe('Position Sizing — 10% target model', () => {
 });
 
 describe('Confidence Threshold Enforcement', () => {
-  it('Test 4: Confidence = 69, minConfidence = 70 → NO_SIGNAL', () => {
-    const [ev] = applyProEntryGates([buyEval('BTC', 69)], gateCtx());
+  it('Test 4: Confidence = 30, medium threshold = 40 → NO_SIGNAL', () => {
+    const [ev] = applyProEntryGates([buyEval('BTC', 30)], gateCtx());
     expect(ev.willExecute).toBe(false);
     expect(ev.status).toContain('BELOW_THRESHOLD');
   });

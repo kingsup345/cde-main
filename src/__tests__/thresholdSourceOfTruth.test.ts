@@ -9,7 +9,6 @@ import {
   computeProSignal,
   evaluateProExit,
   proMinConfidence,
-  proAllocationPercent,
   calculateOptimalEntryPrice,
   PRO_DEFAULT_ENTRY_CONFIDENCE,
   PRO_CONFIDENCE_BY_RISK,
@@ -37,26 +36,26 @@ import { TP2_PERCENT } from '@cde/engine/execution';
 
 // ── §3 — the threshold table is the single definition ────────────────────────
 
-describe('§3 — minConfidence comes from one flat operator bar, or an override', () => {
-  it('is 70 by default — the bot enters a BUY once overall confidence crosses 70', () => {
-    // The flat default replaced the per-risk table as the ACTUAL entry bar.
-    expect(proMinConfidence('low')).toBe(PRO_DEFAULT_ENTRY_CONFIDENCE);
-    expect(proMinConfidence('medium')).toBe(PRO_DEFAULT_ENTRY_CONFIDENCE);
-    expect(proMinConfidence('high')).toBe(PRO_DEFAULT_ENTRY_CONFIDENCE);
-    expect(PRO_DEFAULT_ENTRY_CONFIDENCE).toBe(70);
-    // The §3 reference table stays exported (it reports the per-risk values).
-    expect(PRO_CONFIDENCE_BY_RISK).toEqual({ low: 55, medium: 40, high: 25 });
+describe('§3 — minConfidence comes from the risk-level table, or an override', () => {
+  it('low → 55, medium → 40, high → 25 (no override)', () => {
+    expect(proMinConfidence('low')).toBe(55);
+    expect(proMinConfidence('medium')).toBe(40);
+    expect(proMinConfidence('high')).toBe(25);
   });
 
-  it('a positive override replaces the default entirely', () => {
+  it('a positive override replaces the table entirely', () => {
     expect(proMinConfidence('low', 85)).toBe(85);
     expect(proMinConfidence('high', 85)).toBe(85);
   });
 
-  it('a zero or negative override is not an override — 70 stands', () => {
-    expect(proMinConfidence('medium', 0)).toBe(70);
-    expect(proMinConfidence('medium', -3)).toBe(70);
-    expect(proMinConfidence('medium', undefined)).toBe(70);
+  it('a zero or negative override is not an override — table value stands', () => {
+    expect(proMinConfidence('medium', 0)).toBe(40);
+    expect(proMinConfidence('medium', -3)).toBe(40);
+    expect(proMinConfidence('medium', undefined)).toBe(40);
+  });
+
+  it('an unknown riskLevel falls back to the default 70', () => {
+    expect(proMinConfidence('unknown' as any)).toBe(70);
   });
 
   it('allocation is fixed at 10% of equity, regardless of confidence', () => {
@@ -70,20 +69,6 @@ describe('§3 — minConfidence comes from one flat operator bar, or an override
 
     const [ev81] = applyProEntryGates([buyEval('LA', 81)], gateCtx());
     expect(ev81.budgetUsd).toBeCloseTo(1000, 6);
-  });
-
-  it('proAllocationPercent always returns 10% — confidence no longer affects allocation', () => {
-    expect(proAllocationPercent(70)).toBe(PRO_ALLOCATION_DEFAULT_PERCENT);
-    expect(proAllocationPercent(PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD)).toBe(PRO_ALLOCATION_DEFAULT_PERCENT);
-    expect(proAllocationPercent(PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD + 1)).toBe(PRO_ALLOCATION_DEFAULT_PERCENT);
-
-    const roomyCtx = gateCtx({ initialAmount: 10_000, equity: 1_000_000, cash: 1_000_000 });
-    const [ev70] = applyProEntryGates([buyEval('LA', 70)], roomyCtx);
-    // 10% of the $10,000 START, not of the inflated equity.
-    expect(ev70.budgetUsd).toBeCloseTo(10_000 * PRO_ALLOCATION_DEFAULT_PERCENT, 6);
-    const [ev85] = applyProEntryGates([buyEval('BTC', 85)], roomyCtx);
-    expect(ev85.budgetUsd).toBeCloseTo(10_000 * PRO_ALLOCATION_DEFAULT_PERCENT, 6);
-    expect(ev85.budgetUsd).toBe(ev70.budgetUsd);
   });
 });
 
@@ -150,7 +135,7 @@ describe('§4 — the gate sequence runs in the doc\'s order, on the evaluation'
     const [ev] = applyProEntryGates([buyEval('LA', 30)], gateCtx());
     expect(ev.status).toBe('NO_SIGNAL [BELOW_THRESHOLD]');
     expect(ev.willExecute).toBe(false);
-    expect(ev.confidenceGap).toBeCloseTo(40, 6); // 70 − 30
+    expect(ev.confidenceGap).toBeCloseTo(10, 6); // medium threshold 40 − 30
   });
 
   it('no free slot → NO_SLOTS (queued buys occupy slots too)', () => {
@@ -377,6 +362,15 @@ describe('buildProEvaluation — the warm-up floor is honest about it', () => {
     const ev = buildProEvaluation('LA', candles, 100, 0, 'medium', undefined);
     expect(ev.status).toBe('NO_SIGNAL [NO_DATA]');
     expect(ev.willExecute).toBe(false);
+  });
+
+  it('accepts exactly MIN_PRO_CANDLES (20) as the warm-up boundary', () => {
+    const candles: Candle[] = Array.from({ length: 20 }, (_, i) => ({
+      timestamp: 1_700_000_000_000 + i * 3_600_000,
+      open: 100, high: 101, low: 99, close: 100, volume: 1000
+    }));
+    const ev = buildProEvaluation('LA', candles, 100, 0, 'medium', undefined);
+    expect(ev.status).not.toBe('NO_SIGNAL [NO_DATA]');
   });
 });
 

@@ -12,7 +12,6 @@ export {
   computeProSignal,
   proTechnicalScore,
   proMinConfidence,
-  proAllocationPercent,
   calculateOptimalEntryPrice,
   evaluateProExit,
   PRO_INDICATOR_WEIGHTS,
