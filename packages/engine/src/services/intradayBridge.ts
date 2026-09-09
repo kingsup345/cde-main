@@ -117,6 +117,12 @@ export interface SignalEvaluation {
    *  waits for the market to reach it — "יחשב מתי להיכנס, יגיע לשער וירכוש".
    *  This is typically LOWER than current price (a better entry at support). */
   optimalEntryPrice?: number;
+  /** Slot preemption: this entry claimed a full slot by evicting the weakest
+   *  RESTING (unfilled) entry order, whose id this holds. The tick loop cancels
+   *  that order once THIS entry is actually placed (a downstream budget refusal
+   *  leaves the incumbent untouched). Filled positions are never preemptible —
+   *  only pending orders. See pickPreemptibleEntryOrder in simExecution.ts. */
+  preemptsOrderId?: string;
 }
 
 export interface PortfolioInput {

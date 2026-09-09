@@ -16,6 +16,7 @@ import {
   generateNewOrders,
   fillDueOrders,
   selectFillableOrders,
+  applySlotPreemptions,
   SimPosition,
   SimTrade,
   SimPoint,
@@ -562,8 +563,15 @@ export function useSimulationBot({ config, isRunning, cryptoData, recommendation
       toBase: (sym: string) => toBaseAsset(sym)
     });
 
+    // Slot preemption: an evaluation that took a full slot by evicting the
+    // weakest resting entry carries its id — drop that incumbent now that its
+    // replacement placed.
+    const placedSymbols = new Set(newOrders.map((o) => o.symbol));
     if (newOrders.length) {
-      setPending((prev) => [...prev, ...newOrders]);
+      setPending((prev) => {
+        const { pending: kept } = applySlotPreemptions(prev, evaluations, placedSymbols);
+        return [...kept, ...newOrders];
+      });
     }
     setLastEvaluation(new Date().toLocaleTimeString('he-IL'));
     setNextTickAt(Date.now() + 5000);

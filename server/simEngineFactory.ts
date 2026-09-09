@@ -22,6 +22,7 @@ import {
   fillDueOrders,
   selectFillableOrders,
   applyFundingAccrual,
+  applySlotPreemptions,
   SimPosition,
   SimTrade,
   SimPoint,
@@ -483,6 +484,16 @@ export function createGenericSimEngine(strategy: SimEngineStrategy, getSymbols?:
     console.log(`${strategy.logPrefix} evals=${evaluations.length} willExecute=${we} pending=${pending.length} pos=${positions.length} cash=${cash.toFixed(2)}`);
 
     const newOrders = strategy.generateOrders(input, evaluations);
+    // Slot preemption: an evaluation that claimed a full slot by evicting the
+    // weakest resting entry carries its id — cancel that incumbent, but only now
+    // that its replacement actually placed (a downstream budget refusal leaves
+    // the incumbent alone).
+    const placedSymbols = new Set(newOrders.map((o) => o.symbol));
+    const preempt = applySlotPreemptions(pending, evaluations, placedSymbols);
+    if (preempt.cancelledIds.length) {
+      pending = preempt.pending;
+      for (const id of preempt.cancelledIds) console.log(`${strategy.logPrefix} slot preempted — cancelled resting entry ${id}`);
+    }
     if (newOrders.length) pending = [...pending, ...newOrders];
 
     const { due, expired } = selectFillableOrders(pending, Date.now(), priceFor);

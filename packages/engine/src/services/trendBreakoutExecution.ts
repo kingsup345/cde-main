@@ -31,7 +31,8 @@ import {
   isInEntryCooldown,
   MIN_SIM_ENTRY_USD,
   MIN_ORDER_EXCEEDS_POSITION_TARGET,
-  blockEntry as blockEntryShared
+  blockEntry as blockEntryShared,
+  pickPreemptibleEntryOrder
 } from './simExecution';
 import {
   reachedStop,
@@ -393,6 +394,10 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       .map((o) => tradeKey(o.symbol, o.side === 'sell' || o.side === 'short' ? 'SHORT' : 'LONG'))
   );
   let logicalTradeCount = openLogicalKeys.size + pendingEntryKeys.size;
+  // Resting lot-0 entry orders (no positionId — scale-in adds carry one) are
+  // only reservations: a clearly stronger fresh breakout may evict the weakest.
+  const preemptiblePending = ctx.pending.filter((o) => !o.positionId);
+  const preemptClaimed = new Set<string>();
 
   /** Places one entry lot, respecting cash + both exposure caps. Returns the
     *  notional actually committed (0 if nothing could be placed). */
@@ -578,8 +583,13 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       continue;
     }
     if (logicalTradeCount >= ctx.maxConcurrentTrades) {
-      blockEntry(ev, 'MAX_CONCURRENT', `${logicalTradeCount}/${ctx.maxConcurrentTrades} עסקאות פתוחות — אין מקום`);
-      continue;
+      const victimId = pickPreemptibleEntryOrder(ev.confidence, preemptiblePending, preemptClaimed);
+      if (!victimId) {
+        blockEntry(ev, 'MAX_CONCURRENT', `${logicalTradeCount}/${ctx.maxConcurrentTrades} עסקאות פתוחות — אין מקום`);
+        continue;
+      }
+      preemptClaimed.add(victimId);
+      ev.preemptsOrderId = victimId;
     }
     const corr = evaluateCorrelationGate({
       symbol: ev.symbol,

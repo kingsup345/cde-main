@@ -103,8 +103,8 @@ function sellEval(symbol: string, confidence: number): SignalEvaluation {
   } as SignalEvaluation;
 }
 
-const queuedOrder = (symbol: string): PendingOrder =>
-  ({ id: `o-${symbol}`, symbol, side: 'buy' } as unknown as PendingOrder);
+const queuedOrder = (symbol: string, confidence = 80): PendingOrder =>
+  ({ id: `o-${symbol}`, symbol, side: 'buy', confidence } as unknown as PendingOrder);
 
 const gateCtx = (over: Partial<ProGateContext> = {}): ProGateContext => ({
   positions: [],
@@ -139,11 +139,11 @@ describe('§4 — the gate sequence runs in the doc\'s order, on the evaluation'
     expect(ev.confidenceGap).toBeCloseTo(10, 6); // medium threshold 40 − 30
   });
 
-  it('no free slot → NO_SLOTS (queued buys occupy slots too)', () => {
+  it('no free slot → NO_SLOTS (queued buys occupy slots too; incumbent not weak enough to evict)', () => {
     const held = { id: 'p1', symbol: 'HELD' } as never;
     const [ev] = applyProEntryGates([buyEval('LA', 80)], gateCtx({
       positions: [held],
-      pending: [queuedOrder('OTHER')],
+      pending: [queuedOrder('OTHER', 80)], // equal strength — margin not met
       maxPositions: 2
     }));
     expect(ev.status).toBe('NO_SIGNAL [NO_SLOTS]');
@@ -231,6 +231,51 @@ describe('§4 — the gate sequence runs in the doc\'s order, on the evaluation'
     // 10% of a $1 start = $0.10. MIN_ORDER stays a constraint, never a size.
     const [ev] = applyProEntryGates([buyEval('LA', 95)], gateCtx({ initialAmount: 1, equity: 1, cash: 1 }));
     expect(ev.status).toBe('NO_SIGNAL [MIN_ORDER_EXCEEDS_POSITION_TARGET]');
+  });
+});
+
+// ── §4 gate 5 — slot preemption: a resting buy is a reservation, not a position
+describe('§4 — a clearly stronger BUY evicts the weakest RESTING buy from its slot', () => {
+  it('full slots, weak incumbent → SIGNAL + preemptsOrderId (the tick loop cancels it)', () => {
+    const [ev] = applyProEntryGates([buyEval('LA', 85)], gateCtx({
+      pending: [queuedOrder('AA', 82), queuedOrder('BB', 60), queuedOrder('CC', 78)],
+      maxPositions: 3
+    }));
+    expect(ev.status).toBe('SIGNAL SPOT BUY');
+    expect(ev.willExecute).toBe(true);
+    expect(ev.preemptsOrderId).toBe('o-BB'); // the weakest of the three
+  });
+
+  it('not clearly stronger (< +5 margin) → NO_SLOTS, incumbent untouched', () => {
+    const [ev] = applyProEntryGates([buyEval('LA', 63)], gateCtx({
+      pending: [queuedOrder('AA', 80), queuedOrder('BB', 60)],
+      maxPositions: 2
+    }));
+    expect(ev.status).toBe('NO_SIGNAL [NO_SLOTS]');
+    expect(ev.preemptsOrderId).toBeUndefined();
+  });
+
+  it('a filled position is never preemptible — only pending orders are', () => {
+    const held = { id: 'p1', symbol: 'HELD', confidence: 10 } as never;
+    const [ev] = applyProEntryGates([buyEval('LA', 99)], gateCtx({
+      positions: [held],
+      maxPositions: 1
+    }));
+    expect(ev.status).toBe('NO_SIGNAL [NO_SLOTS]');
+  });
+
+  it('full slots, two strong candidates → only one eviction per resting order; the other waits', () => {
+    const evs = applyProEntryGates(
+      [buyEval('LA', 90), buyEval('MO', 88)],
+      gateCtx({ pending: [queuedOrder('AA', 50), queuedOrder('BB', 84)], maxPositions: 2 })
+    );
+    const la = evs.find((e) => e.symbol === 'LA')!;
+    const mo = evs.find((e) => e.symbol === 'MO')!;
+    expect(la.status).toBe('SIGNAL SPOT BUY');
+    expect(la.preemptsOrderId).toBe('o-AA');
+    // MO (88) would need to beat BB (84) by +5 — it does not, and AA is already claimed.
+    expect(mo.status).toBe('NO_SIGNAL [NO_SLOTS]');
+    expect(mo.preemptsOrderId).toBeUndefined();
   });
 });
 

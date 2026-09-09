@@ -21,7 +21,7 @@ import type { Candle } from '@cde/engine';
 import { SignalEvaluation } from '@cde/engine';
 import { getUniverseMarketData } from '@cde/engine/market-data';
 import { toBaseAsset } from '@cde/engine/market-data';
-import { fillDueOrders, selectFillableOrders } from '@cde/engine/execution';
+import { fillDueOrders, selectFillableOrders, applySlotPreemptions } from '@cde/engine/execution';
 import {
   applyProEntryGates,
   generateProOrders,
@@ -311,7 +311,15 @@ export function useProSimulationBot({ config, isRunning, cryptoData, initialSnap
       limitEntries: config.proLimitEntries === true
     });
 
-    if (newOrders.length) setPending((prev) => [...prev, ...newOrders]);
+    // Slot preemption: a BUY that claimed a full slot by evicting the weakest
+    // resting buy carries its id — drop that incumbent now its replacement placed.
+    const placedSymbols = new Set(newOrders.map((o) => o.symbol));
+    if (newOrders.length) {
+      setPending((prev) => {
+        const { pending: kept } = applySlotPreemptions(prev, evaluations, placedSymbols);
+        return [...kept, ...newOrders];
+      });
+    }
     setLastEvaluation(new Date().toLocaleTimeString('he-IL'));
     setNextTickAt(Date.now() + 5000);
   }, [isRunning, evaluations, signalsBySymbol, minConfidence, heartbeat, dailyDrawdownPercent, weeklyDrawdownPercent, config, riskLevel]);

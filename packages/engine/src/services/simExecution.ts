@@ -548,6 +548,61 @@ export interface OrderGenContext {
 
 const ENTRY_ORDER_SIDES = new Set(['buy', 'sell', 'long', 'short']);
 
+/** A fresh candidate must beat the weakest resting entry's confidence by at
+ *  least this margin before it may evict it — a churn guard, so two signals of
+ *  near-equal strength do not take turns cancelling each other tick by tick. */
+export const SLOT_PREEMPT_MARGIN = 5;
+
+/**
+ * Slot preemption. When `positions + pending` has filled every slot, a strong
+ * new entry candidate may still enter by bumping the WEAKEST resting (unfilled)
+ * entry order out of its slot — a resting limit order is a reservation, not a
+ * position, and the strongest signals should own the reservations.
+ *
+ * Rules:
+ *  - Only PENDING ENTRY orders are preemptible. A filled position is never
+ *    touched here.
+ *  - The candidate must beat the weakest incumbent's confidence by
+ *    SLOT_PREEMPT_MARGIN.
+ *  - `claimed` carries ids already spoken for earlier in the same batch, so two
+ *    candidates in one tick cannot both free the same slot.
+ *
+ * Returns the id of the order to cancel, or null to leave the candidate blocked.
+ */
+export function pickPreemptibleEntryOrder(
+  candidateConfidence: number,
+  pending: PendingOrder[],
+  claimed: Set<string>
+): string | null {
+  let weakest: PendingOrder | undefined;
+  for (const o of pending) {
+    if (!ENTRY_ORDER_SIDES.has(o.side) || claimed.has(o.id)) continue;
+    if (!weakest || o.confidence < weakest.confidence) weakest = o;
+  }
+  if (!weakest) return null;
+  return candidateConfidence >= weakest.confidence + SLOT_PREEMPT_MARGIN ? weakest.id : null;
+}
+
+/**
+ * Applies the cancellations that `pickPreemptibleEntryOrder` decided during the
+ * gate / order-gen pass: every evaluation that carries `preemptsOrderId` AND
+ * actually produced an order this tick (its symbol is in `placedSymbols`) has
+ * its incumbent removed from `pending`. Shared by the server tick loop and both
+ * browser fallback hooks so the rule is identical in every runtime.
+ */
+export function applySlotPreemptions(
+  pending: PendingOrder[],
+  evaluations: { symbol: string; preemptsOrderId?: string }[],
+  placedSymbols: Set<string>
+): { pending: PendingOrder[]; cancelledIds: string[] } {
+  const cancel = new Set<string>();
+  for (const ev of evaluations) {
+    if (ev.preemptsOrderId && placedSymbols.has(ev.symbol)) cancel.add(ev.preemptsOrderId);
+  }
+  if (cancel.size === 0) return { pending, cancelledIds: [] };
+  return { pending: pending.filter((o) => !cancel.has(o.id)), cancelledIds: [...cancel] };
+}
+
 export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
   const {
     positions, pending, evaluations, executionDelaySec, dailyDrawdownPercent, weeklyDrawdownPercent,
@@ -661,6 +716,9 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
   let totalPositionCount = positions.length + pending.filter((o) => ENTRY_ORDER_SIDES.has(o.side)).length;
   let futuresPositionCount = positions.filter((p) => p.type === 'FUTURES').length +
     pending.filter((o) => o.type === 'FUTURES' && ENTRY_ORDER_SIDES.has(o.side)).length;
+  // Resting entry orders this batch has already agreed to evict for a stronger
+  // candidate — so a second candidate cannot free the same slot twice.
+  const preemptClaimed = new Set<string>();
 
   // Running correlation book: open positions + already-pending entries, grown
   // as this batch accepts more.
@@ -704,7 +762,16 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
     // run of losses spread across different symbols (regime, not symbol).
     if (isInStreakCooldown(streakCooldownFromHistory(closedTrades ?? [], ctx.equity, ev.symbol))) continue;
     if (isInStreakCooldown(portfolioStreakCooldownUntil(closedTrades ?? [], ctx.equity))) continue;
-    if (totalPositionCount >= maxPositions) continue;
+    if (totalPositionCount >= maxPositions) {
+      // Slots are full — but a resting (unfilled) entry order is only a
+      // reservation. If this candidate clearly outranks the weakest one, evict
+      // it and take the slot; the tick loop cancels the incumbent once this
+      // order is actually placed.
+      const victimId = pickPreemptibleEntryOrder(ev.confidence, pending, preemptClaimed);
+      if (!victimId) continue;
+      preemptClaimed.add(victimId);
+      ev.preemptsOrderId = victimId;
+    }
     if (ev.tradeType === 'FUTURES' && futuresPositionCount >= maxFuturesPositions) continue;
 
     // SPOT is long-only here (short-selling spot is unsupported). A SPOT

@@ -96,7 +96,10 @@ export {
   fillDueOrders,
   applyFundingAccrual,
   FUNDING_INTERVAL_MS,
-  validateExposureModel
+  validateExposureModel,
+  SLOT_PREEMPT_MARGIN,
+  pickPreemptibleEntryOrder,
+  applySlotPreemptions
 } from './services/simExecution';
 export type { FundingRateReading, FundingAccrualResult } from './services/simExecution';
 

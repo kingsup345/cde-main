@@ -34,7 +34,7 @@ import { PER_ASSET_EXPOSURE_CAP_PERCENT, POSITION_TARGET_PCT, CAPITAL_FLOOR_PCT,
 import type { Candle } from './tradeEngine';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import type { SimPosition, PendingOrder } from './simExecution';
-import { MIN_SIM_ENTRY_USD, MIN_ORDER_EXCEEDS_POSITION_TARGET, blockEntry } from './simExecution';
+import { MIN_SIM_ENTRY_USD, MIN_ORDER_EXCEEDS_POSITION_TARGET, blockEntry, pickPreemptibleEntryOrder } from './simExecution';
 import { isLongSide, TP1_EXIT_FRACTION, TP1_PERCENT, TP2_PERCENT, MAX_LOSS_PERCENT } from './exitPolicy';
 
 export const uid = (p: string) => `pro-${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -185,8 +185,13 @@ export function applyProEntryGates(
   const minConfidence = proMinConfidence(ctx.riskLevel, ctx.minConfidenceOverride);
 
   // §4 gate 5: open positions AND queued buys occupy slots. A slot an exit is
-  // about to free stays occupied until that exit FILLS.
+  // about to free stays occupied until that exit FILLS — but a queued buy that
+  // has not filled is only a reservation, and a clearly stronger fresh signal
+  // may evict the weakest one (see the gate below).
   let occupiedSlots = ctx.positions.length + ctx.pending.filter((o) => o.side === 'buy').length;
+  // Resting buys this batch has already agreed to evict, so two candidates in
+  // one tick cannot both free the same slot.
+  const preemptClaimed = new Set<string>();
   // Budget is tracked against CASH (what's actually spendable), not equity —
   // an allocation that equity would allow but cash couldn't cover would create
   // an order the fill step then refuses, producing "ready to buy" with no
@@ -239,7 +244,16 @@ export function applyProEntryGates(
       }
 
       if (occupiedSlots >= ctx.maxPositions) {                                                                                  // 5
-        return gateResult(ev, 'NO_SIGNAL [NO_SLOTS]', `אין סלוט פנוי (${occupiedSlots}/${ctx.maxPositions})`, false, minConfidence);
+        // A resting (unfilled) buy is a reservation, not a position. If this
+        // BUY clearly outranks the weakest resting one, evict it and take the
+        // slot; generateProOrders emits this order and the tick loop cancels
+        // the incumbent once it is actually placed.
+        const victimId = pickPreemptibleEntryOrder(ev.confidence, ctx.pending, preemptClaimed);
+        if (!victimId) {
+          return gateResult(ev, 'NO_SIGNAL [NO_SLOTS]', `אין סלוט פנוי (${occupiedSlots}/${ctx.maxPositions})`, false, minConfidence);
+        }
+        preemptClaimed.add(victimId);
+        ev.preemptsOrderId = victimId;
       }
       if (!ev.price || ev.price <= 0) {                                                                                         // 6
         return gateResult(ev, 'NO_SIGNAL [NO_PRICE]', 'אין מחיר תקף', false, minConfidence);

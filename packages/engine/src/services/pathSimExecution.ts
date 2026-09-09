@@ -14,7 +14,7 @@
 
 import { Candle } from './tradeEngine';
 import type { SignalEvaluation } from './intradayBridge';
-import { isInEntryCooldown, computeEntryBudget, MIN_SIM_ENTRY_USD } from './simExecution';
+import { isInEntryCooldown, computeEntryBudget, MIN_SIM_ENTRY_USD, pickPreemptibleEntryOrder } from './simExecution';
 import type { SimPosition, PendingOrder } from './simExecution';
 import {
   isInStreakCooldown,
@@ -156,6 +156,9 @@ export function generatePathOrders(ctx: PathOrderGenContext): PendingOrder[] {
   // ── Entries ────────────────────────────────────────────────────────────────
   let workingCash = ctx.cash;
   let totalPositionCount = positions.length + pending.filter((o) => PATH_ENTRY_ORDER_SIDES.has(o.side)).length;
+  // Resting entry orders this batch has already agreed to evict for a stronger
+  // candidate — so one slot cannot be freed twice in the same tick.
+  const preemptClaimed = new Set<string>();
 
   const correlationBook: CorrelatedHolding[] = [
     ...positions.map((p) => ({ symbol: p.symbol, direction: toPositionDirection(p.side) })),
@@ -184,7 +187,15 @@ export function generatePathOrders(ctx: PathOrderGenContext): PendingOrder[] {
     if (isInEntryCooldown(exitCooldown[ev.symbol])) continue;
     if (isInStreakCooldown(streakCooldownFromHistory(closedTradeMetrics, ctx.equity, ev.symbol))) continue;
     if (isInStreakCooldown(portfolioStreakCooldownUntil(closedTradeMetrics, ctx.equity))) continue;
-    if (totalPositionCount >= maxPositions) continue;
+    if (totalPositionCount >= maxPositions) {
+      // A resting (unfilled) entry order only reserves a slot. A clearly
+      // stronger fresh candidate evicts the weakest one; the tick loop cancels
+      // the incumbent once this order is actually placed.
+      const victimId = pickPreemptibleEntryOrder(ev.confidence, pending, preemptClaimed);
+      if (!victimId) continue;
+      preemptClaimed.add(victimId);
+      ev.preemptsOrderId = victimId;
+    }
 
     // Spot only. Every measured expectancy in the table is a 1R-stop spot trade;
     // applying leverage to it would change the distribution being bet on without

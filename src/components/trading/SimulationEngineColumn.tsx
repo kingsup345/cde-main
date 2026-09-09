@@ -17,6 +17,16 @@ const safeNumber = (value: unknown, fallback = 0): number => {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 };
 
+// Price formatter that keeps small-cap prices readable ($0.024790) without
+// drowning majors in zeros ($64231.50).
+const fmtUsd = (n: number): string => {
+  const a = Math.abs(n);
+  const dp = a >= 100 ? 2 : a >= 1 ? 4 : 6;
+  return `$${n.toFixed(dp)}`;
+};
+
+const signedPct = (n: number): string => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+
 export interface EngineColumnProps {
   title: string;
   subtitle: string;
@@ -181,7 +191,7 @@ export default function SimulationEngineColumn({
               </CardContent>
             </Card>
           </DialogTrigger>
-          <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogContent className="w-[95vw] max-w-4xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
             <DialogHeader>
               <DialogTitle className={`flex items-center gap-2 font-mono ${accentClass}`}>
                 <Zap className="w-5 h-5" />
@@ -206,7 +216,7 @@ export default function SimulationEngineColumn({
             {!evaluations?.length ? (
               <div className="text-muted-foreground text-sm text-center py-4 font-mono">אין נתוני מטבעות זמינים</div>
             ) : (
-              <div className="space-y-3 font-mono">
+              <div className="space-y-3 font-mono overflow-x-hidden">
                 <div className="flex items-center gap-2 flex-wrap sticky top-0 bg-background/95 backdrop-blur z-10 pb-2">
                   <Input
                     value={evalFilter}
@@ -237,10 +247,34 @@ export default function SimulationEngineColumn({
                   const price = safeNumber(rec.price);
                   const priceChange24h = safeNumber(rec.priceChange24h);
                   const factors = Array.isArray(rec.factors) ? rec.factors : [];
+
+                  // The price the engine is working toward, plus its SL/TP ladder.
+                  // A resting entry order (limit, or a delayed-market Pro entry) is
+                  // the authoritative "waiting for this price" source; otherwise
+                  // fall back to the levels computed on the evaluation itself
+                  // (Pro: optimalEntryPrice + ATR ladder; the others: the plan on
+                  // a SIGNAL). All are optional — the block hides when absent.
+                  const entryOrder = pending.find(
+                    (o) => o.symbol === rec.symbol && (o.side === 'buy' || o.side === 'long' || o.side === 'short')
+                  );
+                  const entryTarget = safeNumber(entryOrder?.signalPrice ?? rec.optimalEntryPrice ?? (rec.willExecute ? rec.price : 0)) || null;
+                  const planSl = safeNumber(entryOrder?.stopLoss ?? rec.stopLoss ?? 0) || null;
+                  const planTp1 = safeNumber(entryOrder?.takeProfit1 ?? rec.takeProfit1 ?? rec.takeProfit ?? 0) || null;
+                  const planTp2 = safeNumber(entryOrder?.takeProfit2 ?? rec.takeProfit2 ?? 0) || null;
+                  const waitingForLimit = !!entryOrder && entryOrder.fill !== 'market';
+                  const relPct = (target: number | null) =>
+                    target && entryTarget ? ((target - entryTarget) / entryTarget) * 100 : null;
+                  const gapFromMarketPct = entryTarget && price ? ((entryTarget - price) / price) * 100 : null;
+                  const showPlan = Boolean(
+                    (entryTarget || planSl || planTp1 || planTp2) &&
+                    (entryOrder || rec.willExecute || rec.strategyDecision ||
+                      /SIGNAL|ORDER_QUEUED|BELOW_THRESHOLD|DOWNTREND/.test(rec.status))
+                  );
+
                   return (
-                    <div key={rec.symbol} className="p-3.5 border border-border/40 rounded-lg bg-card/30">
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <div className="flex items-center gap-2">
+                    <div key={rec.symbol} className="p-3.5 border border-border/40 rounded-lg bg-card/30 min-w-0 overflow-hidden break-words">
+                      <div className="flex items-start justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap min-w-0">
                           <Badge className="font-mono">{rec.symbol}</Badge>
                           <Badge
                             variant="outline"
@@ -256,15 +290,44 @@ export default function SimulationEngineColumn({
                           </Badge>
                           <span className={`text-sm font-bold ${accentClass}`}>{isProbability ? 'הסתברות' : 'ביטחון'} {confidence.toFixed(1)}%</span>
                         </div>
-                        <div className="text-sm text-muted-foreground">
-                          ${price.toFixed(4)}{' '}
+                        <div className="text-sm text-muted-foreground shrink-0">
+                          {fmtUsd(price)}{' '}
                           <span className={priceChange24h >= 0 ? 'text-green-400' : 'text-red-400'}>
                             ({priceChange24h >= 0 ? '+' : ''}{priceChange24h.toFixed(2)}%)
                           </span>
                         </div>
-                        <Badge variant={rec.willExecute ? 'default' : 'secondary'} className="text-xs">{rec.status}</Badge>
+                        <Badge variant={rec.willExecute ? 'default' : 'secondary'} className="text-xs whitespace-normal break-all text-right max-w-full">{rec.status}</Badge>
                       </div>
-                      <div className="text-xs text-muted-foreground mt-2">{rec.reasoning}</div>
+                      <div className="text-xs text-muted-foreground mt-2 break-words">{rec.reasoning}</div>
+                      {showPlan && (
+                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] border-t border-border/20 pt-2">
+                          {entryTarget && (
+                            <span className="text-foreground/90">
+                              כניסה מתוכננת: <span className={`font-bold ${accentClass}`}>{fmtUsd(entryTarget)}</span>
+                            </span>
+                          )}
+                          {waitingForLimit && gapFromMarketPct !== null && (
+                            <span className="text-muted-foreground">
+                              ⏳ ממתין לשער · שוק כעת {fmtUsd(price)} ({signedPct(gapFromMarketPct)} עד היעד)
+                            </span>
+                          )}
+                          {planSl && (
+                            <span className="text-red-400">
+                              SL {fmtUsd(planSl)}{relPct(planSl) !== null ? ` (${signedPct(relPct(planSl)!)})` : ''}
+                            </span>
+                          )}
+                          {planTp1 && (
+                            <span className="text-green-400">
+                              TP1 {fmtUsd(planTp1)}{relPct(planTp1) !== null ? ` (${signedPct(relPct(planTp1)!)})` : ''}
+                            </span>
+                          )}
+                          {planTp2 && (
+                            <span className="text-green-500">
+                              TP2 {fmtUsd(planTp2)}{relPct(planTp2) !== null ? ` (${signedPct(relPct(planTp2)!)})` : ''}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={() => setOpenLogs((prev) => (prev.includes(rec.symbol) ? prev.filter((s) => s !== rec.symbol) : [...prev, rec.symbol]))}
@@ -300,13 +363,13 @@ export default function SimulationEngineColumn({
                             </div>
                           )}
                           {factors.map((f: DecisionFactor, i: number) => (
-                            <div key={i} className="flex items-start justify-between gap-2 text-xs py-1 border-b border-border/20 last:border-0">
-                              <div className="flex items-center gap-2 min-w-0">
+                            <div key={i} className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-0.5 sm:gap-2 text-xs py-1 border-b border-border/20 last:border-0">
+                              <div className="flex items-center gap-2 flex-wrap min-w-0">
                                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${f.impact === 'positive' ? 'bg-green-400' : f.impact === 'negative' ? 'bg-red-400' : 'bg-muted-foreground'}`} />
-                                <span className="font-semibold">{f.label ?? 'N/A'}</span>
-                                <span className="text-muted-foreground">{f.value ?? 'N/A'}</span>
+                                <span className="font-semibold break-words">{f.label ?? 'N/A'}</span>
+                                <span className="text-muted-foreground break-words min-w-0">{f.value ?? 'N/A'}</span>
                               </div>
-                              <span className="text-muted-foreground text-left max-w-[50%]">{f.note ?? ''}</span>
+                              <span className="text-muted-foreground sm:text-left break-words min-w-0 sm:max-w-[45%]">{f.note ?? ''}</span>
                             </div>
                           ))}
                         </div>
