@@ -122,6 +122,7 @@ export type Prev4hRangeReason =
   | 'RANGE_TOO_WIDE'
   | 'NO_BREAKOUT'        // price still inside [L, H]
   | 'ENTRY_TOO_EXTENDED' // broke out but price already ran too far past H/L
+  | 'RISK_VS_COST'       // stop distance too small relative to round-trip cost
   | 'CONFIDENCE_BELOW_MIN'
   | 'RR_BELOW_MIN';      // actual R:R below threshold
 

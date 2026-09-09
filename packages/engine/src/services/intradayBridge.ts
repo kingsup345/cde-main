@@ -106,6 +106,12 @@ export interface SignalEvaluation {
     bollingerBands: { upper: number; middle: number; lower: number; position: string };
     volumeProfile: { poc: number; valueAreaHigh: number; valueAreaLow: number; position: string };
   };
+  /** Pro (§4 regime filter): true when EMA50 < EMA200 on the higher timeframe —
+   *  injected by proAlgEngine to block BUY signals during confirmed downtrends. */
+  isDowntrend?: boolean;
+  /** Live bid/ask spread as a % of mid-price, forwarded from the liquidity
+   *  snapshot so the Pro gate can screen out illiquid entries. */
+  spreadPercent?: number;
   /** Pro (§6): the optimal entry price computed from indicator support levels.
    *  When `limitEntries` is true, the bot places a LIMIT order at this price and
    *  waits for the market to reach it — "יחשב מתי להיכנס, יגיע לשער וירכוש".
