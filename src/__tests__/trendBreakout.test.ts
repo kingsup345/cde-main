@@ -108,6 +108,27 @@ describe('evaluateTrendBreakout — signal', () => {
     expect(ev.status).toContain('VOLUME_TOO_LOW');
   });
 
+  it('a firing SIGNAL always clears the minRewardRisk floor on its final levels', () => {
+    const ev = evaluateTrendBreakout(longSignalInput());
+    expect(ev.willExecute).toBe(true);
+    const plan = readTrendBreakoutPlan(ev) as TrendBreakoutPlan;
+    const grossRR = Math.abs(plan.takeProfit1 - plan.entryRef) / plan.riskPerUnit;
+    expect(grossRR).toBeGreaterThanOrEqual(DEFAULT_TREND_BREAKOUT_PARAMS.minRewardRisk);
+  });
+
+  it('abstains with RR_TOO_LOW when a params change would invert the levels (backstop)', () => {
+    // The TP formula keeps R:R >= tpRMultiplier, so this can only be reached by
+    // a bad param override. Deep lower wicks blow ATR(M15) up so 2.8×ATR far
+    // exceeds 4.2% (stop pinned to the cap) without lifting the Donchian upper;
+    // tpRMultiplier 0.05 then drives atrTp1 under the 3% floor → the executed
+    // TP1 is +3% against a 4.2% stop → grossRR 0.71 < 1.2.
+    const wide = longSignalInput();
+    wide.m15 = wide.m15.map((c, i) => (i < wide.m15.length - 1 ? { ...c, low: c.close - 24 } : c));
+    const ev = evaluateTrendBreakout({ ...wide, params: { tpRMultiplier: 0.05 } });
+    expect(ev.willExecute).toBe(false);
+    expect(ev.status).toContain('RR_TOO_LOW');
+  });
+
   it('abstains with NO_DATA below the minimum candle counts', () => {
     const ev = evaluateTrendBreakout({
       symbol: 'THIN',

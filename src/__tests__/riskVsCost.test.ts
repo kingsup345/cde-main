@@ -142,3 +142,31 @@ describe('MEAN_REVERSION stop floor (buildRiskPlan)', () => {
     expect(plan.stopDistancePercent).toBeCloseTo(unknobbed.stopDistancePercent, 5);
   });
 });
+
+describe('MEAN_REVERSION is exempt from the 3% TP floor (F6)', () => {
+  const entry = 100;
+  // Wide enough SL that the ATR TP branch (SL × 1.5) is still under 3%, and a
+  // near VWAP target (1.2% away) — so a 3% floor would push TP1 past both.
+  const near = {
+    entryPrice: entry,
+    atr5: entry * 0.006, atr15: entry * 0.006, equity: 10_000,
+    stopReference: entry * (1 - 0.012),
+    targetReference: entry * (1 + 0.012)
+  };
+
+  it('MR TP1 tracks the structural / ATR target, not 3%', () => {
+    const plan = buildRiskPlan({
+      ...baseRiskInput, ...near,
+      params: withParams({ meanReversionMinStopPercent: 0.25 })
+    });
+    expect(plan.approved).toBe(true);
+    expect(plan.rewardPercent).toBeLessThan(3);
+    expect(plan.grossRewardRisk).toBeGreaterThanOrEqual(DEFAULT_INTRADAY_PARAMS.tp1RewardRisk - 0.01);
+  });
+
+  it('the same inputs as TREND_PULLBACK still floor TP1 at 3%', () => {
+    const plan = buildRiskPlan({ ...baseRiskInput, ...near, setupType: 'TREND_PULLBACK', params: withParams({}) });
+    expect(plan.approved).toBe(true);
+    expect(plan.rewardPercent).toBeGreaterThanOrEqual(3 - 0.01);
+  });
+});

@@ -68,30 +68,43 @@ p.weeklyDrawdownPercent >= 15  → NO_SIGNAL (נעילה)
 מוקלדים מחדש).
 
 ### גודל פוזיציה וסיכון (`intradayRisk.ts` — `buildRiskPlan`)
-- **סיכון לעסקה:** `riskUsd = equity × 0.5% × sizingMultiplier` (adaptive,
-  יורד לפי הפסדים אחרונים, לעולם לא עולה מעל 1).
-- **תקרת FUTURES:** מרג'ין ≤ `equity × 4%`, מינוף ≤ **5x**.
-- **תקרת SPOT:** נוציונל ≤ `equity × 15%`.
-- **תקרת חשיפה ממונפת כוללת:** `equity × 20%`.
-- **תקרת נכס בודד (רק FUTURES):** `equity × 8%` — `PER_ASSET_EXPOSURE_CAP_PERCENT`
-  ב-`intradayParams.ts` (משותף גם ל-Pro/Path, ראה שם). **לא חל על SPOT.**
+- **גודל:** נוציונל יעד = `sizingBase × positionTargetPct (10%)`, ללא תלות
+  במרחק הסטופ. `sizingBase` = ההון ההתחלתי בסימולציה (`useFixedSizingBase`),
+  ה-equity החי בבוט האמיתי. `riskUsd` נגזר מזה × riskPercent. **הערה:**
+  `sizingMultiplier` מוחזר לטלמטריה אך **לא** מוכפל בנוציונל ב-`buildRiskPlan`
+  (ה-sim מחיל אותו ב-`resolveEntryBudget`).
+- **תקרת FUTURES:** מרג'ין ≤ `sizingBase × 4%`, מינוף ≤ **5x**.
+- **תקרת נכס בודד (SPOT ו-FUTURES כאחד):** `sizingBase × 10%` —
+  `PER_ASSET_EXPOSURE_CAP_PERCENT` ב-`intradayParams.ts`. `maxSpotNotionalPercent`
+  גם הוא 10% (מאוחד).
+- **תקרת חשיפה כוללת:** `sizingBase × maxLeveragedExposurePercent` (20% בבוט
+  האמיתי, 80% בסימולציה דרך `SIM_INTRADAY_PARAMS_OVERRIDE`).
 - **הזמנה מינימלית:** בסימולציה **$100** — `SIM_INTRADAY_PARAMS_OVERRIDE.minOrderUsd`
   ב-`simExecution.ts` (בקשת מפעיל). `buildRiskPlan` מעגל פוזיציה קטנה מ-$100
   כלפי מעלה לסף; `generateNewOrders` הוא backstop שמעגל שוב אם צריך (מזומן +
   equity ≥ $100). (לבוט האמיתי הסף נשאר $5 — `DEFAULT_INTRADAY_PARAMS.minOrderUsd`.)
 
-### יציאה (Stop/Target קבועים) — זו האסטרטגיה, לא מבנה
+### יציאה (Stop/Target דינמיים) — `buildRiskPlan` ב-`intradayRisk.ts`
 ```
-FIXED_SL_PERCENT = 1.8%   (מרחק הסטופ מ-entry)
-FIXED_TP_PERCENT = 3.0%   (מרחק TP1 מ-entry) → gross R:R = 3.0/1.8 ≈ 1.667
+SL  = ההדוק מבין: atr5 × maxStopAtrMult  |  |entry - (stopReference ∓ buffer)|
+      clamp ל-[minStopPercent 0.12% , maxStopPercent 1.5%] ואז תקרת 4.2%
+      MEAN_REVERSION: רצפה נוספת — meanReversionMinStop{AtrMult,Percent}
+TP1 = הרחוק מבין: SL × tp1RewardRisk  |  |targetReference - entry|  |  רצפת 3%
+TP2 = TP1 × (tp2RewardRisk / tp1RewardRisk)
 ```
-קבועים יחידים ב-`intradayRisk.ts` (משותפים ל-`buildRiskPlan` ול-fallback).
-ה-"3%" הוא **טייק-פרופיט**, לא תקרת הפסד.
+`FIXED_TP_PERCENT = 3.0` הוא הקבוע היחיד שנשאר — **רצפת** ה-TP1 לכל setup
+**חוץ מ-MEAN_REVERSION** (שהיעד שלו הוא ה-VWAP, מבנית מתחת ל-3% בדשדוש; רצפת
+3% דחפה את היעד מעבר לרמה שהעסקה קיימת כדי להגיע אליה). ענף ה-ATR עדיין שומר
+`grossRR ≥ tp1RewardRisk`. (`FIXED_SL_PERCENT` נמחק; הסטופ דינמי מאז `ecfd37b`.)
+ה-"3%" הוא טייק-פרופיט, לא תקרת הפסד — תקרת ההפסד היא `MAX_LOSS_PERCENT = 4.2%`.
 
-`RiskPlanInput.stopReference` / `targetReference` הם **טלמטריה בלבד** — נכנסים
-ליומן ההחלטה ולסקורינג של ה-setup/entry, אבל `buildRiskPlan` **מתעלם מהם**
-לחישוב ה-levels. אם אי-פעם רוצים סטופ מבני — זה שינוי אסטרטגיה מכוון, במקום
-אחד (`buildRiskPlan`), ו-`validateLevelDirection` תופס סטופ/TP בצד הלא נכון.
+`RiskPlanInput.stopReference` / `targetReference` — `stopReference` **נכנס**
+לחישוב ה-SL (הענף המבני); `targetReference` נכנס לחישוב ה-TP1. שניהם גם
+בטלמטריה. `validateLevelDirection` תופס סטופ/TP בצד הלא נכון.
+
+**שער `RISK_VS_COST`** (`evaluateCostEdge`): נדחה כש-`riskPercent <
+minStopCostMultiple (2.0) × totalCostPercent` — סטופ צר מכדי לשרוד את סבב
+העמלות+slippage שלו, מקרה ש-`netRewardRisk` (שמחלק ב-risk) עיוור אליו.
 
 **R:R** מחושב תמיד מ-3 המספרים של `buildRiskPlan`:
 ```
@@ -104,10 +117,9 @@ netRR         = (rewardPercent - totalCostPercent) / riskPercent
 GROSS_RR=.. ENTRY_FEE%=.. EXIT_FEE%=.. SLIPPAGE%=.. TOTAL_COST%=.. NET_RR=..`
 לאימות ידני.
 
-### עוקף high-confidence (`intradayEngine.ts`)
-אם `buildRiskPlan` נדחה **וגם** `confidence >= 72` → תוכנית fallback מינימלית
-($5 בסיס). **לא** עוקף חסימת תקרת נכס בודד (בדיקת מחרוזת על הודעת הדחייה —
-שביר, ראה הערה בקוד).
+### אין עוקף high-confidence
+היה fallback ב-`confidence >= 72` שעקף caps/מינימום/כיוון-סטופ — **נמחק**.
+דחייה מ-`buildRiskPlan` או מ-`evaluateCostEdge` היא דחייה, ללא קשר לציון.
 
 ### מה תוצאה בריאה אמורה להיראות
 - רוב הסימבולים: `NO_SETUP`/`NO_ENTRY` (זה תקין — הגנה נגד רעש).

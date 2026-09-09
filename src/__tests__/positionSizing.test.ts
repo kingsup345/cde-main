@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildRiskPlan,
-  FIXED_SL_PERCENT,
   FIXED_TP_PERCENT
 } from '@cde/engine/analysis';
 import { DEFAULT_INTRADAY_PARAMS } from '@cde/engine';

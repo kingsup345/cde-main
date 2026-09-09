@@ -61,7 +61,7 @@ export type { SetupScores, Setup15M } from './services/intradaySetup';
 export { detectSetup15M } from './services/intradaySetup';
 
 export type { CostAnalysis, CostInput, RiskPlanInput, RiskPlan as IntradayRiskPlan } from './services/intradayRisk';
-export { evaluateCostEdge, buildRiskPlan, validateLevelDirection, FIXED_SL_PERCENT, FIXED_TP_PERCENT } from './services/intradayRisk';
+export { evaluateCostEdge, buildRiskPlan, validateLevelDirection, FIXED_TP_PERCENT } from './services/intradayRisk';
 export { MAX_LOSS_PERCENT, TP1_EXIT_FRACTION, weightedAverageExit, capStopLoss } from './services/exitPolicy';
 export type { ExitLevel } from './services/exitPolicy';
 

@@ -15,17 +15,18 @@
  *   LIQUIDITY → SPREAD → NO_SETUP → NO_ENTRY → RISK → COST → DATA_MISMATCH
  *
  * RISK before COST is deliberate: buildRiskPlan produces the FINAL, executed
- * entry / SL / TP1 (fixed-percentage model), and the cost gate + every R:R
- * number must be computed on those exact levels — never on the structural
- * references, which are telemetry only. DATA_MISMATCH is the guard that no
- * SIGNAL escapes with a cost analysis on different levels than the order.
+ * entry / SL / TP1 (dynamic ATR/structure SL, TP with a 3% floor), and the
+ * cost gate + every R:R number must be computed on those exact levels — never
+ * on the structural references, which are telemetry only. DATA_MISMATCH is the
+ * guard that no SIGNAL escapes with a cost analysis on different levels than
+ * the order.
  */
 
 import { Candle, PortfolioRiskStats, formatDynamicPrice } from './tradeEngine';
 import { detectRegime1H, Regime1H } from './intradayRegime';
 import { detectSetup15M, Setup15M } from './intradaySetup';
 import { confirmEntry5M, Entry5M } from './intradayEntry';
-import { evaluateCostEdge, CostAnalysis, buildRiskPlan, RiskPlan, FIXED_SL_PERCENT, FIXED_TP_PERCENT } from './intradayRisk';
+import { evaluateCostEdge, CostAnalysis, buildRiskPlan, RiskPlan, FIXED_TP_PERCENT } from './intradayRisk';
 import { DEFAULT_INTRADAY_PARAMS, DecisionGate, Direction, IntradayParams, SetupType,
   withParams
 } from './intradayParams';
@@ -57,6 +58,11 @@ export interface IntradayDecisionInput {
   now?: number;
   /** Current notional exposure per asset for per-asset cap checks */
   existingExposureByAsset?: Record<string, number>;
+  /** How the entry will actually fill, for the §25 cost model. Defaults to true
+   *  (the live bot and the backtest rest LIMIT orders). A market entry pays
+   *  taker + full slippage; a caller that fills at market should pass false so
+   *  the gate prices the real cost rather than the cheaper resting fill. */
+  entryIsLimit?: boolean;
 }
 
 export interface IntradayDecision {
@@ -89,9 +95,9 @@ export interface IntradayDecision {
     edgeRatio: number;
     netRewardRisk: number;
     grossRewardRisk: number;
-    /** |entry - SL| / entry * 100 on the executed levels (fixed model → 1.8). */
+    /** |entry - SL| / entry * 100 on the executed levels (dynamic, <= 4.2%). */
     stopLossDistancePercent: number;
-    /** |TP1 - entry| / entry * 100 on the executed levels (fixed model → 3.0). */
+    /** |TP1 - entry| / entry * 100 on the executed levels (dynamic, >= 3%). */
     rewardDistancePercent: number;
     riskPercent: number;
     atrPercentile: number;
@@ -379,7 +385,9 @@ export function evaluateIntradayDecision(input: IntradayDecisionInput): Intraday
     takeProfit1: effectiveRisk.takeProfit1,
     spreadPercent,
     atrPercentile: regime.atrPercentile,
-    entryIsLimit: true,
+    // Default true (live bot + backtest rest limits). A market-fill caller
+    // passes false so the gate prices the taker + slippage it actually pays.
+    entryIsLimit: input.entryIsLimit ?? true,
     // Already computed by confirmEntry5M for the volume trigger — reused.
     relativeVolume: entry.indicators.relativeVolume,
     params

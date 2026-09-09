@@ -59,7 +59,10 @@ LONG: `SL = Entry − ATR(M15) × 2.8` · SHORT: `SL = Entry + ATR(M15) × 2.8`.
 לכיוון התקרה בתנודתיות רגילה).
 
 ## 10. Take Profit
-`TP = Entry ± R × 2.0` (Risk/Reward 1:2).
+`TP1 = Entry ± max(R × tpRMultiplier, FIXED_TP_PERCENT)` — יעד 2R, אך לא קרוב
+מ-3% מ-Entry (רצפת "רווח מינ' 3%", החלטת מפעיל 2026-09-08). `TP2 = TP1 × 1.5`.
+חצי הפוזיציה נסגר ב-TP1, השאר רץ ל-TP2. שער `minRewardRisk` (1.2, כמו בשאר
+הבוטים) דוחה SIGNAL שבו `|TP1−Entry| / R < 1.2` (`RR_TOO_LOW`) — backstop.
 
 ## 11. SCALE — Scale-in מדורג (לא פותחים הכול בבת אחת)
 ברירת מחדל 50% / 30% / 20%. SCALE_2 (30%) רק אם המחיר ≥ +0.5R **וגם** המגמה
@@ -73,19 +76,21 @@ NO AVERAGING DOWN.**
 `1 × ATR(M15)`, מתקדם רק בכיוון הרווח, לעולם לא מתרחק אחרי שהוקטן.
 
 ## 13. Exit Conditions
-A. SL נחצה — **בסגירת נר M15** (לא בתוך נר; פִּיּק דרך הסטופ לא סוגר את העסקה).
-   חריגת תקרת 4.2% בתוך נר היא החריג היחיד — יציאת חירום מיידית.
-B. TP נחצה. C. Trend Reversal — LONG נסגרת אם H1 Supertrend → DOWN
-(SHORT → UP). D. Time Stop — אחרי 24 נרות H1. E. Invalidated Setup — חוסם
-scale נוסף (לא סוגר).
+A. SL נחצה — **מיד במגע/חצייה** של המחיר החי (אין אישור סגירת נר). תקרת 4.2%
+   היא סטופ נפרד שגם הוא נבדק על המחיר החי.
+B. TP נחצה (TP1 חלקי 50%, TP2 מלא). C. Trend Reversal — LONG נסגרת אם
+H1 Supertrend → DOWN (SHORT → UP). D. Time Stop — אחרי 24 נרות H1.
+E. Invalidated Setup — חוסם scale נוסף (לא סוגר).
 
 ## 14. Risk Management
-`riskAmount = equity × 0.5%` ; `positionSize = riskAmount / distance_to_SL`.
-לא אחוז שרירותי — ה-SL קובע את הגודל.
+גודל = `sizingBase × positionTargetPct (10%)`, ללא תלות במרחק הסטופ.
+`sizingBase` = ההון ההתחלתי (סימולציה). ה-SL רק **מודד** את הסיכון בדולרים,
+לא קובע את הגודל. Scale-in: כל לוט הוא שבר מהיעד הזה (50/30/20), סך הכול ≤ 10%.
 
 ## 15. Exposure Limits
-`MAX_ASSET_EXPOSURE = 8% equity` · `MAX_TOTAL_EXPOSURE = 20% equity`.
-אין מספיק equity/margin → `NO_ENTRY`.
+`PER_ASSET_EXPOSURE_CAP_PERCENT = 10%` · `MAX_TOTAL_EXPOSURE_PERCENT = 80%`
+(סימולציה), שניהם מ-`sizingBase`. אין מספיק headroom/מזומן → הכניסה מדולגת עם
+סיבה שמזהה את החסם שנקשר.
 
 ## 16. Drawdown Protection
 Daily DD ≥ 8% → BLOCK new entries. Weekly DD ≥ 15% → LOCK new entries.

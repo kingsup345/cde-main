@@ -18,7 +18,6 @@ import {
   buildRiskPlan,
   evaluateCostEdge,
   validateLevelDirection,
-  FIXED_SL_PERCENT,
   FIXED_TP_PERCENT
 } from '@cde/engine/analysis';
 

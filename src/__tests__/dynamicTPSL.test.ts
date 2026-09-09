@@ -19,7 +19,6 @@ import {
   buildRiskPlan,
   evaluateCostEdge,
   validateLevelDirection,
-  FIXED_SL_PERCENT,
   FIXED_TP_PERCENT,
   MAX_LOSS_PERCENT,
   TP1_EXIT_FRACTION,

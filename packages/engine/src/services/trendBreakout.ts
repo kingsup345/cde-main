@@ -43,6 +43,12 @@ export interface TrendBreakoutParams {
   slAtrMultiplier: number;
   /** TP distance = R * this (R = |entry - SL|). */
   tpRMultiplier: number;
+  /** Minimum gross reward:risk on the FINAL levels (|TP1-entry| / |entry-SL|).
+   *  A backstop, not the driver: the TP formula (max(R×tpRMultiplier, 3%))
+   *  already keeps this >= tpRMultiplier. If a future edit inverts the levels
+   *  the SIGNAL is refused with RR_TOO_LOW instead of opening. Matches the
+   *  minRewardRisk gate the other three sim bots carry. */
+  minRewardRisk: number;
   /** Risk budget for the FULL position, as a fraction of equity.
    *  Deprecated: position sizing now uses positionTargetPct (10% of equity).
    *  Kept for API stability — do not use for sizing. */
@@ -99,6 +105,10 @@ export const DEFAULT_TREND_BREAKOUT_PARAMS: TrendBreakoutParams = {
   // and stop exits confirm on the M15 close (see trendBreakoutExecution.ts).
   slAtrMultiplier: 2.8,
   tpRMultiplier: 2.0,
+  // Same floor the other three sim bots use (intraday buildRiskPlan,
+  // prev4hRange). With tpRMultiplier 2.0 the real R:R never drops here — this
+  // only bites if the TP formula is later changed to invert the levels.
+  minRewardRisk: 1.2,
   /** Deprecated: position sizing now uses positionTargetPct (10% of equity).
    *  Kept for API stability — do not use for sizing. */
   riskPerTrade: 0.005,
@@ -145,6 +155,7 @@ export type TrendBreakoutReason =
   | 'VOLUME_TOO_LOW'
   | 'M5_CONFIRMATION_FAILED'
   | 'ENTRY_TOO_EXTENDED'
+  | 'RR_TOO_LOW'
   | 'CONFIDENCE_BELOW_MIN';
 
 export type TrendDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
@@ -362,6 +373,25 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
   const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;
   const takeProfit2 = isLong ? entryRef + tp1Distance * 1.5 : entryRef - tp1Distance * 1.5;
   const takeProfit = takeProfit1;
+
+  // R:R backstop (spec §10) — refuse an inverted trade before it can open, the
+  // same gate intraday's buildRiskPlan and prev4hRange already enforce. The TP
+  // formula above keeps grossRR >= tpRMultiplier, so this only fires if a
+  // future edit breaks that; a named refusal beats a silent bad entry.
+  const grossRewardRisk = Math.abs(entryRef - stopLoss) > 0
+    ? Math.abs(takeProfit1 - entryRef) / Math.abs(entryRef - stopLoss)
+    : 0;
+  if (grossRewardRisk < p.minRewardRisk) {
+    return base('SETUP', 'RR_TOO_LOW', {}, [
+      ...debugFactors,
+      {
+        label: 'R:R',
+        value: `${grossRewardRisk.toFixed(2)} (סף ${p.minRewardRisk})`,
+        impact: 'negative',
+        note: `SL ${stopLoss.toFixed(6)} · TP1 ${takeProfit1.toFixed(6)} — יעד קרוב מהסטופ`
+      }
+    ]);
+  }
 
   // ── §7 confidence score (0-100, weights sum to 100) ────────────────────
   const c = computeConfidence(direction, {

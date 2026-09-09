@@ -195,22 +195,26 @@ export function evaluateCostEdge(input: CostInput): CostAnalysis {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RISK PLAN — FIXED-percentage SL/TP + risk-first sizing + min leverage
+// RISK PLAN — dynamic ATR/structure SL, TP with a 3% floor, 10%-notional sizing
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// The executed stop and target are a FIXED percentage of entry
-// (FIXED_SL_PERCENT / FIXED_TP_PERCENT), NOT a structural level. This is the
-// single source of truth for entry / stopLoss / takeProfit1; the cost analysis
-// and the order generator both read these exact numbers back.
+// The executed stop is the TIGHTER of an ATR multiple (atr5 × maxStopAtrMult)
+// and the structural swing (stopReference ∓ buffer), clamped to
+// [minStopPercent, maxStopPercent] and then to the shared 4.2% cap.
+// MEAN_REVERSION additionally has a stop FLOOR (meanReversionMinStop*).
+// TP1 is the FARTHER of an R-multiple and the structural target, with a
+// FIXED_TP_PERCENT (3%) minimum for every setup EXCEPT MEAN_REVERSION (whose
+// thesis target is the VWAP, structurally under 3% in a range). TP2 scales
+// off TP1. The ATR branch always keeps grossRR >= tp1RewardRisk.
 //
-// `stopReference` / `targetReference` on RiskPlanInput are TELEMETRY ONLY (see
-// their field docs). If the strategy is ever changed back to structural stops,
-// that is a deliberate strategy change — do it in one place, here, and the
-// direction-sanity check below is what will catch a stop on the wrong side.
+// buildRiskPlan is the single source of truth for entry / stopLoss /
+// takeProfit1; evaluateCostEdge and the order generator read these exact
+// numbers back (the DATA_MISMATCH guard in intradayEngine asserts it).
+// `validateLevelDirection` below catches a wrong-side level if the model is
+// ever changed or a caller hand-builds a plan.
 
-/** Executed stop distance, as a percentage of entry price. Fixed by strategy. */
-export const FIXED_SL_PERCENT = 1.8;
-/** Executed take-profit distance (TP1), as a percentage of entry price. */
+/** Executed take-profit distance (TP1) floor, as a percentage of entry price.
+ *  TP1 is dynamic (ATR / structure) but never closer than this. */
 export const FIXED_TP_PERCENT = 3.0;
 
 export interface RiskPlanInput {
@@ -226,7 +230,8 @@ export interface RiskPlanInput {
   stopReference?: number;
   /** Structural target level. Used to compute the dynamic TP1 distance.
    *  The executed TP1 is the FARTHER of the structural target and the ATR-based
-   *  target, with a hard minimum of FIXED_TP_PERCENT (3%). */
+   *  target, with a FIXED_TP_PERCENT (3%) minimum for every setup except
+   *  MEAN_REVERSION (whose target is the VWAP). */
   targetReference?: number | null;
   atr5: number;
   atr15: number;
@@ -406,9 +411,19 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   const slDistance = entry * slDistancePct / 100;
 
   // ── Dynamic TP computation ─────────────────────────────────────────────
-  // TP = f(ATR, structure, volatility, regime, minimum_reward=3%).
-  // TP1 distance must be >= 3%. TP2 scales from TP1 by tp2RewardRisk/tp1RewardRisk.
-  const minTp1Distance = entry * FIXED_TP_PERCENT / 100;
+  // TP = f(ATR, structure, minimum_reward). TP2 scales from TP1 by
+  // tp2RewardRisk/tp1RewardRisk.
+  //
+  // MEAN_REVERSION is exempt from the 3% floor: its thesis target is the VWAP
+  // (targetReference), a snap-back that is structurally 1-2% in a RANGING
+  // regime. Forcing TP1 past 3% put the executed target beyond the level the
+  // trade exists to reach, so the position stayed open past its own thesis
+  // until MAX_DURATION or a re-divergence. The ATR branch (slDistance ×
+  // tp1RewardRisk) still floors R:R at tp1RewardRisk, and evaluateCostEdge's
+  // net-R:R gate still rejects a target too small to clear costs.
+  const minTp1Distance = input.setupType === 'MEAN_REVERSION'
+    ? 0
+    : entry * FIXED_TP_PERCENT / 100;
 
   // ATR-based TP1 distance (using reward-risk ratio)
   const atrTp1Distance = slDistance * params.tp1RewardRisk;
@@ -419,12 +434,13 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
     structureTp1Distance = Math.abs(input.targetReference - entry);
   }
 
-  // Choose the FARTHER target (larger distance = more reward), but at least 3%
+  // Choose the FARTHER target (larger distance = more reward); non-MR trades
+  // also carry the 3% floor via minTp1Distance.
   let tp1Distance = Math.max(atrTp1Distance, structureTp1Distance ?? 0, minTp1Distance);
 
   // ── TP impossible gate ──────────────────────────────────────────────────
-  // If the dynamic SL makes it impossible to achieve TP >= 3% with a reasonable
-  // R:R, reject the trade. No artificial SL widening or TP shrinking.
+  // If the dynamic SL makes it impossible to achieve a reasonable R:R, reject
+  // the trade. No artificial SL widening or TP shrinking.
   const grossRR = tp1Distance / slDistance;
   if (grossRR < params.minRewardRisk) {
     return rejected(`R:R נטו ${grossRR.toFixed(2)} מתחת לסף ${params.minRewardRisk} (SL=${slDistancePct.toFixed(2)}%, TP=${(tp1Distance/entry*100).toFixed(2)}%) — NO TRADE`);
