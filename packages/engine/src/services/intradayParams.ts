@@ -298,8 +298,8 @@ export function isBelowCapitalFloor(initialAmount: number | undefined, equity: n
 }
 
 export const DEFAULT_INTRADAY_PARAMS: IntradayParams = {
-  adxTrendMin: 25,
-  adxRangeMax: 20,
+  adxTrendMin: 22,
+  adxRangeMax: 18,
   atrPercentileLookback: 200,
   atrPercentileLow: 30,
   atrPercentileHigh: 80,
@@ -343,6 +343,9 @@ export const DEFAULT_INTRADAY_PARAMS: IntradayParams = {
   minRewardRisk: 1.2,
   minStopCostMultiple: 2.0,
 
+  // Deprecated for SIZING (that is positionTargetPct now), but still read:
+  // intradayEngine passes it to buildRiskPlan as the risk-%% telemetry base,
+  // and the walk-forward harness sweeps it. Kept rather than rewire both.
   riskPerTradePercent: 0.5,
   maxRiskPerTradePercent: 0.75,
   positionTargetPct: POSITION_TARGET_PCT,
@@ -377,14 +380,16 @@ export const DEFAULT_INTRADAY_PARAMS: IntradayParams = {
 
   trailingActivationRBySetup: { TREND_PULLBACK: 0.8, BREAKOUT_RETEST: 1.0, MEAN_REVERSION: 1.5 },
   trailingActivationR: 1.0,
-  trailingAtrMult: 1.2,
+  // 1.2 → 1.8: the post-TP1 runner was trailing out near break-even before TP2
+  // could print. A wider trail gives it room to actually reach the 2nd target.
+  trailingAtrMult: 1.8,
 
   limitOrderTtlMinutes: 10,
   touchFillProbability: 0.5,
   partialFillRatio: 0.5,
 
   liquidityTermCap: 0.05,
-  liquidityTermWeight: 0.4,
+  liquidityTermWeight: 0,
   dailyDrawdownBlockPercent: DAILY_DRAWDOWN_BLOCK_PERCENT,
   weeklyDrawdownLockPercent: WEEKLY_DRAWDOWN_LOCK_PERCENT,
   weeklyDrawdownFlattenPercent: WEEKLY_DRAWDOWN_LOCK_PERCENT

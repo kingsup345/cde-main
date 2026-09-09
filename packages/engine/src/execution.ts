@@ -146,7 +146,11 @@ export {
   computeSymbolStreakCooldownUntil,
   isInStreakCooldown,
   streakCooldownFromHistory,
-  streakCooldownReason
+  streakCooldownReason,
+  PORTFOLIO_STREAK_COOLDOWN_LOSSES,
+  PORTFOLIO_STREAK_COOLDOWN_MS,
+  portfolioStreakCooldownUntil,
+  portfolioStreakCooldownReason
 } from './services/adaptiveRisk';
 
 // ── 4H Path bot order generation ─────────────────────────────────────────────

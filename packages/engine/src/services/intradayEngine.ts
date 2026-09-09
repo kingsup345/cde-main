@@ -288,23 +288,23 @@ export function evaluateIntradayDecision(input: IntradayDecisionInput): Intraday
   if (regime.volatility === 'EXTREME') tradeType = 'SPOT';
 
   // ── TRANSITIONAL / SOFT_TREND quality gate (§8/§34) ─────────────────────────
-  // In a transitional (no-clean-regime) market, new FUTURES are blocked and only
-  // an especially high-quality SPOT setup is permitted (Setup + Entry both strong).
-  // SOFT_TRAND gets an even higher bar: both strong + ATR percentile below 70
-  // (not in extreme volatility).
+  // FUTURES stays blocked here (forced SPOT below — a real risk control). The
+  // quality bar used to be `setup.strong && entry.strong && atrPercentile<70`
+  // (≈64 && ≈68) — a cliff that made the ADX 20-25 band nearly untradeable.
+  // Now a low OR-bar: one decent score carries it, ATR only blocks EXTREME.
   if (transitional || softTrend) {
     tradeType = 'SPOT';
     const isSoftTrend = softTrend;
-    const atrOk = !regime.strictMode && (regime.atrPercentile ?? 50) < (isSoftTrend ? 70 : 80);
-    const highQuality = setup.strong && entry.strong && atrOk;
-    if (!highQuality) {
-      const reason = isSoftTrend
-        ? `SOFT_TREND דורש Setup+Entry חזקים + ATR percentile < 70 (נחשב ${regime.atrPercentile?.toFixed(0) ?? 'N/A'}) — נחסם (§8)`
-        : `TRANSITIONAL דורש Setup+Entry חזקים (strong); נחסם (§8/§34)`;
+    const decent = setup.setupScore >= 55 || entry.entryScore >= 58;
+    const atrOk = !regime.strictMode; // EXTREME volatility still blocked
+    if (!(decent && atrOk)) {
+      const reason = !atrOk
+        ? `${isSoftTrend ? 'SOFT_TREND' : 'TRANSITIONAL'} + תנודתיות EXTREME — נחסם (§10)`
+        : `${isSoftTrend ? 'SOFT_TREND' : 'TRANSITIONAL'} דורש SetupScore≥55 או EntryScore≥58 (נחשב ${setup.setupScore}/${entry.entryScore}) — נחסם (§8)`;
       logs.push(`[${symbol}] NO_REGIME — ${reason}`);
       return finalize(symbol, 'NO_REGIME', 'NO_SIGNAL', regime, setup, entry, null, null, logs, params, now, mkFunnel('NO_REGIME', 'NO_SIGNAL', setup, entry), null);
     }
-    logs.push(`[${symbol}] ${isSoftTrend ? 'SOFT_TREND' : 'TRANSITIONAL'} — Spot איכותי מאושר (Setup+Entry strong${isSoftTrend ? ' + ATR ok' : ''})`);
+    logs.push(`[${symbol}] ${isSoftTrend ? 'SOFT_TREND' : 'TRANSITIONAL'} — Spot מאושר (SS=${setup.setupScore} ES=${entry.entryScore})`);
   }
 
   // ── GATE 6/7: LIQUIDITY + SPREAD (§26/§27) ─────────────────────────────────

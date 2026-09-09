@@ -22,8 +22,7 @@ import {
 } from './tradeEngine';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
-import { capStopLoss, stopWasCapped, takeProfitLevels, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
-import { FIXED_TP_PERCENT } from './intradayRisk';
+import { capStopLoss, stopWasCapped, takeProfitLevels, tp1FloorDistance, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
 
 // ── Parameters (spec §23 — every knob configurable, no auto-optimisation) ────
 
@@ -115,7 +114,9 @@ export const DEFAULT_TREND_BREAKOUT_PARAMS: TrendBreakoutParams = {
   positionTargetPct: POSITION_TARGET_PCT,
   breakEvenR: 1.0,
   trailingStartR: 1.5,
-  trailingAtrMultiplier: 1.0,
+  // 1.0 → 1.5: keep the runner in the trade long enough to reach TP2 instead
+  // of trailing out on the first pullback after TP1.
+  trailingAtrMultiplier: 1.5,
   maxHoldHours: 24,
   scaleFractions: [0.5, 0.3, 0.2],
   scale2MinR: 0.5,
@@ -133,7 +134,11 @@ export const DEFAULT_TREND_BREAKOUT_PARAMS: TrendBreakoutParams = {
   emaTrendFullSpread: 0.02,
   breakoutFullAtr: 1.0,
   volumeFullMultiplier: 1.5,
-  m5MaxAtrDistance: 1.0
+  // Was 1.0 — the sharpest breakouts (price already >1 ATR(M5) past the level
+  // by the time the M5 confirms) were dropped as ENTRY_TOO_EXTENDED, which is
+  // often the best part of the move. 1.5 keeps them; the confidence M5
+  // component still scales down with distance.
+  m5MaxAtrDistance: 1.5
 };
 
 // ── State machine (spec §6) ─────────────────────────────────────────────────
@@ -363,11 +368,11 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
   const structuralStop = isLong ? entryRef - rUnit : entryRef + rUnit;
   const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
   const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
-  // TP is dynamic: TP1 >= 3% (minimum), TP2 scales from TP1 by 1.5x.
-  // The bot's own 2R target is overridden by the minimum 3% floor (operator
-  // rule 2026-09-08). The trailing logic still measures progress in R off the
-  // (capped) stop, so the runner behaves the same once TP1 is banked.
-  const minTp1Distance = entryRef * FIXED_TP_PERCENT / 100;
+  // TP1 = max(2R target, the shared floor). The floor is tp1FloorDistance =
+  // max(1.5% of entry, 1.5× the capped stop) — not a flat 3%, which is
+  // unreachable in-horizon on a low-ATR(M15) symbol. TP2 scales from TP1 by
+  // 1.5x. Trailing still measures progress in R off the (capped) stop.
+  const minTp1Distance = tp1FloorDistance(entryRef, Math.abs(entryRef - stopLoss));
   const atrTp1Distance = rUnit * p.tpRMultiplier;
   const tp1Distance = Math.max(atrTp1Distance, minTp1Distance);
   const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;

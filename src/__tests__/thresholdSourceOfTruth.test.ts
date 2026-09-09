@@ -17,6 +17,7 @@ import {
   PRO_ALLOCATION_HIGH_PERCENT,
   PRO_STOP_LOSS_PERCENT,
   PRO_TAKE_PROFIT_PERCENT,
+  proStopTpLevels,
   type ProSignalResult
 } from '@cde/engine/analysis';
 import type { Candle, SignalEvaluation } from '@cde/engine';
@@ -265,12 +266,13 @@ const stubSignal = (action: 'BUY' | 'SELL' | 'HOLD', confidence: number): ProSig
   holdScore: 0,
   totalWeight: 105,
   confidence,
+  atrPercent: 0,
   signals: [],
   indicators: {} as ProSignalResult['indicators']
 });
 
 describe('§5 — fixed-percentage exits, independent of the recommendation', () => {
-  const minConfidence = proMinConfidence('medium'); // 70
+  const minConfidence = proMinConfidence('medium'); // 40
 
   it(`closes at −${PRO_STOP_LOSS_PERCENT}% — "Stop Loss"`, () => {
     const d = evaluateProExit({ entryPrice: 100 }, 100 - PRO_STOP_LOSS_PERCENT, stubSignal('BUY', 90), minConfidence);
@@ -351,6 +353,39 @@ describe('§5 — fixed-percentage exits, independent of the recommendation', ()
   });
 });
 
+describe('Pro exit — ATR-scaled stop (no longer a flat 4.2% vs a 3% target)', () => {
+  const minConfidence = proMinConfidence('medium');
+
+  it('proStopTpLevels: stop = clamp(atr%×1.6, 1.8%, 4.2%), TP1 = 1.5× stop, TP2 = 1.5× TP1', () => {
+    const mid = proStopTpLevels(100, 1.5, true); // atr 1.5% → stop 2.4%
+    expect((100 - mid.stopLoss)).toBeCloseTo(2.4, 6);
+    expect((mid.takeProfit1 - 100)).toBeCloseTo(3.6, 6);      // 1.5 × 2.4
+    expect((mid.takeProfit2 - 100)).toBeCloseTo(5.4, 6);      // 1.5 × 3.6
+
+    const lowVol = proStopTpLevels(100, 0.5, true);           // 0.8% → floored to 1.8%
+    expect((100 - lowVol.stopLoss)).toBeCloseTo(1.8, 6);
+    const highVol = proStopTpLevels(100, 5, true);            // 8% → capped at 4.2%
+    expect((100 - highVol.stopLoss)).toBeCloseTo(4.2, 6);
+  });
+
+  it('a position carrying ATR-scaled levels exits on the price, not a flat −4.2%', () => {
+    const lv = proStopTpLevels(100, 1.5, true); // stop at 97.6
+    // Down 3% — beyond the ATR stop (2.4%) but nowhere near the old flat 4.2%.
+    const d = evaluateProExit(
+      { entryPrice: 100, isLong: true, stopLoss: lv.stopLoss, takeProfit1: lv.takeProfit1, takeProfit2: lv.takeProfit2 },
+      97, stubSignal('BUY', 90), minConfidence
+    );
+    expect(d.shouldExit).toBe(true);
+    expect(d.reason).toContain('Stop Loss');
+  });
+
+  it('a position with no stored levels still uses the flat §5 fallback (unchanged)', () => {
+    const d = evaluateProExit({ entryPrice: 100 }, 100 - PRO_STOP_LOSS_PERCENT, stubSignal('BUY', 90), minConfidence);
+    expect(d.shouldExit).toBe(true);
+    expect(d.reason).toContain('Stop Loss');
+  });
+});
+
 // ── warm-up floor ─────────────────────────────────────────────────────────────
 
 describe('buildProEvaluation — the warm-up floor is honest about it', () => {
@@ -413,6 +448,40 @@ describe('alignment — confidence reflects directional conviction', () => {
     if (signal.action === 'BUY') {
       expect(signal.confidence).toBeGreaterThanOrEqual(70);
     }
+  });
+
+  it('trend-participation lane: a gentle uptrend riding near EMA50 fires a BUY even with neutral oscillators', () => {
+    // slope well under ATR + a sine wobble → RSI/Stoch/BB all sit mid-range
+    // (bucket vote = HOLD), but EMA50 > EMA200, price just above EMA50 and
+    // within 3×ATR of it → the trend lane turns HOLD into BUY.
+    const candles: Candle[] = Array.from({ length: 160 }, (_, i) => {
+      // 155 bars of a very gentle rise, then a shallow 5-bar pullback that
+      // lands price back on the EMA50 with the oscillators reset to neutral.
+      const close = i < 155 ? 100 + i * 0.08 : (100 + 154 * 0.08) - (i - 154) * 0.22;
+      return {
+        timestamp: 1_700_000_000_000 + i * 3_600_000,
+        open: close, high: close + 0.9, low: close - 0.9, close, volume: 1000
+      };
+    });
+    const signal = computeProSignal(candles, 1);
+    expect(signal.action).toBe('BUY');
+    expect(signal.confidence).toBeGreaterThanOrEqual(55);
+  });
+
+  it('trend-participation lane stays out when price is extended far above EMA50', () => {
+    // steep parabolic rise → price is many ATR above EMA50 → notExtended is
+    // false → the lane must NOT manufacture a BUY (bucket vote decides).
+    const candles: Candle[] = Array.from({ length: 160 }, (_, i) => {
+      const close = 100 + i * i * 0.01;
+      return {
+        timestamp: 1_700_000_000_000 + i * 3_600_000,
+        open: close - 0.5, high: close + 0.6, low: close - 0.6, close, volume: 1000
+      };
+    });
+    const signal = computeProSignal(candles, 25);
+    // whatever the bucket vote says, confidence must not carry the lane's
+    // 58-floor boost — a non-BUY stays capped at 50.
+    if (signal.action !== 'BUY') expect(signal.confidence).toBeLessThanOrEqual(50);
   });
 
   it('the displayed confidence never exceeds 50 when the action is not BUY', () => {

@@ -81,13 +81,12 @@ describe('evaluateTrendBreakout — signal', () => {
     const plan = readTrendBreakoutPlan(ev) as TrendBreakoutPlan;
     expect(plan).toBeTruthy();
     expect(plan.state).toBe('SIGNAL');
-    // SL below entry (ATR stop, capped at 4.2%); TP is the shared FLAT ladder —
-    // TP1 at exactly +3%, TP2 at +4.5% of entry (operator rule 2026-09-08),
-    // no longer the bot's own 2R target.
+    // SL below entry (ATR stop, capped at 4.2%). TP1 = max(2R, tp1FloorDistance);
+    // here 2R clears the floor so TP1 is the 2R target and TP2 = 1.5×TP1.
     expect(plan.stopLoss).toBeLessThan(plan.entryRef);
     expect(plan.entryRef - plan.stopLoss).toBeLessThanOrEqual(plan.entryRef * 0.042 + 1e-9);
-    expect(plan.takeProfit1).toBeCloseTo(plan.entryRef * 1.03, 4);
-    expect(plan.takeProfit2).toBeCloseTo(plan.entryRef * 1.045, 4);
+    expect(plan.takeProfit1 - plan.entryRef).toBeCloseTo(2 * plan.riskPerUnit, 4);
+    expect(plan.takeProfit2 - plan.entryRef).toBeCloseTo(1.5 * (plan.takeProfit1 - plan.entryRef), 4);
   });
 
   it('abstains with H1_TREND_NEUTRAL when H1 has no sustained trend', () => {
@@ -116,15 +115,14 @@ describe('evaluateTrendBreakout — signal', () => {
     expect(grossRR).toBeGreaterThanOrEqual(DEFAULT_TREND_BREAKOUT_PARAMS.minRewardRisk);
   });
 
-  it('abstains with RR_TOO_LOW when a params change would invert the levels (backstop)', () => {
-    // The TP formula keeps R:R >= tpRMultiplier, so this can only be reached by
-    // a bad param override. Deep lower wicks blow ATR(M15) up so 2.8×ATR far
-    // exceeds 4.2% (stop pinned to the cap) without lifting the Donchian upper;
-    // tpRMultiplier 0.05 then drives atrTp1 under the 3% floor → the executed
-    // TP1 is +3% against a 4.2% stop → grossRR 0.71 < 1.2.
+  it('abstains with RR_TOO_LOW when the guaranteed R:R is below a raised minRewardRisk (backstop)', () => {
+    // tp1FloorDistance's `1.5×stop` term makes grossRR >= 1.5 by construction,
+    // so a plain params change can no longer invert the levels. Force the
+    // backstop by raising minRewardRisk above what the floor guarantees:
+    // tpRMultiplier 0.05 → atrTp1 tiny → TP1 = 1.5×stop → grossRR 1.5 < 2.5.
     const wide = longSignalInput();
     wide.m15 = wide.m15.map((c, i) => (i < wide.m15.length - 1 ? { ...c, low: c.close - 24 } : c));
-    const ev = evaluateTrendBreakout({ ...wide, params: { tpRMultiplier: 0.05 } });
+    const ev = evaluateTrendBreakout({ ...wide, params: { tpRMultiplier: 0.05, minRewardRisk: 2.5 } });
     expect(ev.willExecute).toBe(false);
     expect(ev.status).toContain('RR_TOO_LOW');
   });

@@ -19,6 +19,7 @@ import type { SimPosition, PendingOrder } from './simExecution';
 import {
   isInStreakCooldown,
   streakCooldownFromHistory,
+  portfolioStreakCooldownUntil,
   ClosedTradeRecord
 } from './adaptiveRisk';
 import {
@@ -182,6 +183,7 @@ export function generatePathOrders(ctx: PathOrderGenContext): PendingOrder[] {
     if (newOrders.some((o) => o.symbol === ev.symbol) || pending.some((o) => o.symbol === ev.symbol)) continue;
     if (isInEntryCooldown(exitCooldown[ev.symbol])) continue;
     if (isInStreakCooldown(streakCooldownFromHistory(closedTradeMetrics, ctx.equity, ev.symbol))) continue;
+    if (isInStreakCooldown(portfolioStreakCooldownUntil(closedTradeMetrics, ctx.equity))) continue;
     if (totalPositionCount >= maxPositions) continue;
 
     // Spot only. Every measured expectancy in the table is a 1R-stop spot trade;

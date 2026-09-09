@@ -42,14 +42,14 @@ describe('Intraday R:R — the 13.3119 → 13.0723 → 13.7113 case from the rep
   it('buildRiskPlan produces the dynamic-model levels', () => {
     expect(plan.approved).toBe(true);
     expect(plan.entryPrice).toBe(entryPrice);
-    expect(plan.stopLoss).toBeCloseTo(entryPrice * (1 - 1.5 / 100), 3);   // ATR-based SL, capped at maxStopPercent=1.5%
-    expect(plan.takeProfit1).toBeCloseTo(entryPrice * (1 + 3.0 / 100), 3); // minimum TP=3%
+    expect(plan.stopLoss).toBeCloseTo(entryPrice * (1 - 1.5 / 100), 3);    // ATR-based SL, capped at maxStopPercent=1.5%
+    expect(plan.takeProfit1).toBeCloseTo(entryPrice * (1 + 2.25 / 100), 3); // stop-relative floor: 1.5x the 1.5% stop
   });
 
-  it('risk% ≈ 1.50, reward% ≈ 3.00, gross R:R ≈ 2.00 — dynamic SL/TP model', () => {
+  it('risk% ≈ 1.50, reward% ≈ 2.25, gross R:R ≈ 1.50 — dynamic SL/TP model', () => {
     expect(plan.riskPercent).toBeCloseTo(1.5, 4);
-    expect(plan.rewardPercent).toBeCloseTo(3.0, 4);
-    expect(plan.grossRewardRisk).toBeCloseTo(2.0, 2);
+    expect(plan.rewardPercent).toBeCloseTo(2.25, 4);
+    expect(plan.grossRewardRisk).toBeCloseTo(1.5, 2);
     // gross R:R is exactly reward/risk of the plan's own numbers
     expect(plan.grossRewardRisk).toBeCloseTo(plan.rewardPercent / plan.riskPercent, 3);
   });

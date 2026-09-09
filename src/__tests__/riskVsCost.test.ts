@@ -143,30 +143,33 @@ describe('MEAN_REVERSION stop floor (buildRiskPlan)', () => {
   });
 });
 
-describe('MEAN_REVERSION is exempt from the 3% TP floor (F6)', () => {
+describe('MEAN_REVERSION is exempt from the TP1 floor (F6)', () => {
   const entry = 100;
-  // Wide enough SL that the ATR TP branch (SL × 1.5) is still under 3%, and a
-  // near VWAP target (1.2% away) — so a 3% floor would push TP1 past both.
+  // Tight SL (~0.65%) so 1.5×stop < 1.5%, plus a near VWAP target (1.2% away).
+  // Non-MR then gets the 1.5% absolute floor term of tp1FloorDistance; MR is
+  // exempt and rides the 1.2% structural (VWAP) target.
   const near = {
     entryPrice: entry,
-    atr5: entry * 0.006, atr15: entry * 0.006, equity: 10_000,
-    stopReference: entry * (1 - 0.012),
+    atr5: entry * 0.003, atr15: entry * 0.003, equity: 10_000,
+    stopReference: entry * (1 - 0.006),
     targetReference: entry * (1 + 0.012)
   };
 
-  it('MR TP1 tracks the structural / ATR target, not 3%', () => {
+  it('MR TP1 tracks the structural / ATR target, below the non-MR floor', () => {
     const plan = buildRiskPlan({
       ...baseRiskInput, ...near,
       params: withParams({ meanReversionMinStopPercent: 0.25 })
     });
     expect(plan.approved).toBe(true);
-    expect(plan.rewardPercent).toBeLessThan(3);
+    expect(plan.rewardPercent).toBeLessThan(1.5);
     expect(plan.grossRewardRisk).toBeGreaterThanOrEqual(DEFAULT_INTRADAY_PARAMS.tp1RewardRisk - 0.01);
   });
 
-  it('the same inputs as TREND_PULLBACK still floor TP1 at 3%', () => {
-    const plan = buildRiskPlan({ ...baseRiskInput, ...near, setupType: 'TREND_PULLBACK', params: withParams({}) });
-    expect(plan.approved).toBe(true);
-    expect(plan.rewardPercent).toBeGreaterThanOrEqual(3 - 0.01);
+  it('the same inputs as TREND_PULLBACK carry the stop-relative floor (>= 1.5%)', () => {
+    const mr = buildRiskPlan({ ...baseRiskInput, ...near, params: withParams({ meanReversionMinStopPercent: 0.25 }) });
+    const tp = buildRiskPlan({ ...baseRiskInput, ...near, setupType: 'TREND_PULLBACK', params: withParams({}) });
+    expect(tp.approved).toBe(true);
+    expect(tp.rewardPercent).toBeGreaterThanOrEqual(1.5 - 0.01);
+    expect(tp.rewardPercent).toBeGreaterThan(mr.rewardPercent); // non-MR floored higher than MR's VWAP target
   });
 });

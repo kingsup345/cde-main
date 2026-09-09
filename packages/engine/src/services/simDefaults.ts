@@ -101,7 +101,7 @@ export const SIM_BOTS: Record<SimBotId, SimBotSpec> = {
     storeKey: 'sim-state',
     uiFacing: true,
     confidenceScale: 'score',
-    minConfidence: 52,
+    minConfidence: 50,
     maxFuturesPositions: 2
   },
   pro: {
@@ -111,10 +111,10 @@ export const SIM_BOTS: Record<SimBotId, SimBotSpec> = {
     storeKey: 'pro-sim-state',
     uiFacing: true,
     confidenceScale: 'score',
-    // Operator's flat entry bar (70): the bot enters a BUY once the overall
+    // Operator's flat entry bar (50): the bot enters a BUY once the overall
     // confidence crosses it, regardless of risk level. PRO_CONFIDENCE_BY_RISK
     // stays exported as §3's reference table.
-    minConfidence: 70,
+    minConfidence: 50,
     confidenceDerivedFromRiskLevel: true,
     maxFuturesPositions: 0
   },

@@ -8,7 +8,7 @@
 import { BYBIT_FEES } from './tradeEngine';
 import { clamp } from './intradayIndicators';
 import { DEFAULT_INTRADAY_PARAMS, Direction, IntradayParams, SetupType, PER_ASSET_EXPOSURE_CAP_PERCENT, resolveSizingBase } from './intradayParams';
-import { MAX_LOSS_PERCENT, TP1_EXIT_FRACTION } from './exitPolicy';
+import { MAX_LOSS_PERCENT, TP1_EXIT_FRACTION, tp1FloorDistance } from './exitPolicy';
 
 export interface CostAnalysis {
   // ── The exact levels this analysis was computed on ────────────────────────
@@ -58,6 +58,29 @@ export interface CostInput {
    *  term = 0). */
   relativeVolume?: number;
   params?: IntradayParams;
+}
+
+/**
+ * Modelled round-trip cost as a percent of notional: entry fee + exit fee +
+ * spread + one base-slippage leg. The single definition the other engines
+ * (Path, and anything that needs a quick cost estimate without the full
+ * `evaluateCostEdge` volatility/liquidity model) call instead of a hardcoded
+ * literal. Matches `evaluateCostEdge`'s fee/slippage assumptions.
+ */
+export function estimatedRoundTripCostPct(opts: {
+  tradeType: 'SPOT' | 'FUTURES';
+  spreadPercent?: number;
+  entryIsLimit?: boolean;
+  baseSlippagePercent?: number;
+}): number {
+  const fees = opts.tradeType === 'SPOT' ? BYBIT_FEES.spot : BYBIT_FEES.futures;
+  const entryFeePct = (opts.entryIsLimit ? fees.maker : fees.taker) * 100;
+  const exitFeePct = fees.taker * 100;
+  const spread = Math.max(0, opts.spreadPercent ?? 0);
+  const baseSlip = opts.baseSlippagePercent ?? DEFAULT_INTRADAY_PARAMS.baseSlippagePercent;
+  // One market leg pays spread/2 + base slippage; a resting limit entry pays ~0.
+  const slip = (opts.entryIsLimit ? 0 : spread / 2 + baseSlip) + spread / 2 + baseSlip;
+  return Number((entryFeePct + exitFeePct + slip).toFixed(4));
 }
 
 export function evaluateCostEdge(input: CostInput): CostAnalysis {
@@ -165,14 +188,14 @@ export function evaluateCostEdge(input: CostInput): CostAnalysis {
     };
   }
 
-  const costApproved = expectedMovePercent > totalCostPercent * params.costSafetyMultiplier;
-  const rrApproved = netRewardRisk >= params.minRewardRisk;
-  const approved = costApproved && rrApproved;
+  // Single reward-side gate: netRewardRisk = (move - cost) / risk already folds
+  // in the round-trip cost, and RISK_VS_COST above guards the risk side. The
+  // old `expectedMove > cost × costSafetyMultiplier` check was a cruder version
+  // of the same thing and only ever rejected trades netRR already rejected.
+  const approved = netRewardRisk >= params.minRewardRisk;
 
   const reason = approved
-    ? `מהלך צפוי ${expectedMovePercent.toFixed(3)}% > עלות ${totalCostPercent.toFixed(3)}% × ${params.costSafetyMultiplier} | R:R נטו ${netRewardRisk.toFixed(2)}`
-    : !costApproved
-    ? `מהלך צפוי ${expectedMovePercent.toFixed(3)}% אינו מכסה עלות ${totalCostPercent.toFixed(3)}% × ${params.costSafetyMultiplier} — NO TRADE (§25)`
+    ? `R:R נטו ${netRewardRisk.toFixed(2)} ≥ ${params.minRewardRisk} (מהלך ${expectedMovePercent.toFixed(3)}% · עלות ${totalCostPercent.toFixed(3)}%)`
     : `R:R נטו ${netRewardRisk.toFixed(2)} מתחת ל-${params.minRewardRisk} אחרי עלויות — NO TRADE`;
 
   return {
@@ -414,16 +437,15 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   // TP = f(ATR, structure, minimum_reward). TP2 scales from TP1 by
   // tp2RewardRisk/tp1RewardRisk.
   //
-  // MEAN_REVERSION is exempt from the 3% floor: its thesis target is the VWAP
-  // (targetReference), a snap-back that is structurally 1-2% in a RANGING
-  // regime. Forcing TP1 past 3% put the executed target beyond the level the
-  // trade exists to reach, so the position stayed open past its own thesis
-  // until MAX_DURATION or a re-divergence. The ATR branch (slDistance ×
-  // tp1RewardRisk) still floors R:R at tp1RewardRisk, and evaluateCostEdge's
-  // net-R:R gate still rejects a target too small to clear costs.
+  // The TP1 floor is `tp1FloorDistance` = max(1.5% of entry, 1.5× the stop) —
+  // not a flat 3%. A 3% target is unreachable in-horizon on a low-volatility
+  // major, so those trades used to time-stop out flat. MEAN_REVERSION is
+  // exempt entirely: its thesis target is the VWAP, structurally 1-2% in a
+  // RANGING regime. The ATR branch (slDistance × tp1RewardRisk) plus the
+  // net-R:R gate still keep every trade above its cost.
   const minTp1Distance = input.setupType === 'MEAN_REVERSION'
     ? 0
-    : entry * FIXED_TP_PERCENT / 100;
+    : tp1FloorDistance(entry, slDistance);
 
   // ATR-based TP1 distance (using reward-risk ratio)
   const atrTp1Distance = slDistance * params.tp1RewardRisk;
@@ -435,7 +457,7 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   }
 
   // Choose the FARTHER target (larger distance = more reward); non-MR trades
-  // also carry the 3% floor via minTp1Distance.
+  // also carry the stop-relative floor via minTp1Distance.
   let tp1Distance = Math.max(atrTp1Distance, structureTp1Distance ?? 0, minTp1Distance);
 
   // ── TP impossible gate ──────────────────────────────────────────────────

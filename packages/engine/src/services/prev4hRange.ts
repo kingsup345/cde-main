@@ -21,7 +21,8 @@ import { aggregateToH4 } from './pathEngine';
 import { barOpenFor, BAR_MS } from './pathStudy';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
-import { capStopLoss, stopWasCapped, takeProfitLevels, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
+import { capStopLoss, stopWasCapped, takeProfitLevels, tp1FloorDistance, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
+import { estimatedRoundTripCostPct } from './intradayRisk';
 
 // ── Parameters (all configurable — no auto-optimisation) ────────────────────
 
@@ -38,8 +39,10 @@ export interface Prev4hRangeParams {
     *  distance: at d=0 RR=2.0, at d=0.5*range RR=0.5. The old comment claiming
     *  "~2:1" was only true for a perfect touch of H/L. */
   tpRangeMult: number;
-  /** Risk budget for the position, as a fraction of equity. */
-  riskPerTrade: number;
+  /** The stop distance must be at least this multiple of the modelled
+   *  round-trip cost, or the breakout is refused (`RISK_VS_COST`). Mirrors the
+   *  intraday engine's `minStopCostMultiple`. */
+  costSafetyMultiplier: number;
   /** Target notional as a fraction of equity (e.g. 0.10 = 10%).
    *  Single source of truth for position sizing. */
   positionTargetPct: number;
@@ -89,10 +92,10 @@ export function maxAdmissibleExtensionMult(p: Prev4hRangeParams): number {
 
 export const DEFAULT_PREV4H_RANGE_PARAMS: Prev4hRangeParams = {
   emaPeriod: 20,
-  minRangePct: 0.015,
+  minRangePct: 0.010,
   maxRangePct: 0.08,
   tpRangeMult: 1.0,
-  riskPerTrade: 0.005,
+  costSafetyMultiplier: 2.0,
   positionTargetPct: POSITION_TARGET_PCT,
   minConfidence: 55,
   minH4Bars: 24,
@@ -239,6 +242,7 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   const mid = (H + L) / 2;
   const range = H - L;
   const rangePct = prev.close > 0 ? range / prev.close : 0;
+  const bandPos = (rangePct - p.minRangePct) / Math.max(1e-9, p.maxRangePct - p.minRangePct);
 
   const emaSeries = calculateEMA(h4.map((c) => c.close), p.emaPeriod);
   const ema = emaSeries[emaSeries.length - 1] ?? prev.close;
@@ -268,12 +272,17 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
 
   const isLong = direction === 'LONG';
   
-  // RISK_VS_COST gate
+  // RISK_VS_COST gate — the stop (range midpoint) must clear the modelled
+  // round trip by costSafetyMultiplier. Cost comes from the shared model, not
+  // a local literal; baseSlippagePercent 0.05 = the sim's actual per-leg
+  // market-fill slippage (this bot fills market).
   const structuralStop = mid;
   const entryRefForCost = currentPrice;
   const stopDistancePct = (Math.abs(entryRefForCost - structuralStop) / entryRefForCost) * 100;
-  const estimatedRoundTripCost = 0.35; // 0.1% Taker + 0.1% Taker + Spread + Slippage
-  if (stopDistancePct < 2.0 * estimatedRoundTripCost) {
+  const estimatedRoundTripCost = estimatedRoundTripCostPct({
+    tradeType: isLong ? 'SPOT' : 'FUTURES', entryIsLimit: false, baseSlippagePercent: 0.05
+  });
+  if (stopDistancePct < p.costSafetyMultiplier * estimatedRoundTripCost) {
     return base('ARMED', 'RISK_VS_COST', debug, { confidence: 0 });
   }
   const breakoutDist = isLong ? currentPrice - H : L - currentPrice;
@@ -301,39 +310,33 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
   const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
   const riskPerUnit = Math.abs(entryRef - stopLoss);
-  // TP is the shared FLAT ladder: TP1 at exactly TP1_PERCENT (3%), TP2 at
-  // TP2_PERCENT (4.5%) (operator rule 2026-09-08: "profit minimum 3%"). This
-  // bot's own `H + range × tpRangeMult` target is no longer used — a narrow
-  // prev-4H range would otherwise let TP1 fire at +0.5%, below the 3% floor.
-  // The `minRR` gate below still rejects setups whose stop (range midpoint) is
-  // so wide that 3% is a sub-1.2 reward:risk.
+  // TP1 = max(range-midpoint target, the shared floor). The floor is
+  // tp1FloorDistance = max(1.5% of entry, 1.5× the stop) — not a flat 3%,
+  // which a narrow prev-4H range can never reach in one 4H window. The `minRR`
+  // gate below is still the hard reward:risk backstop.
   const rUnit = Math.abs(entryRef - stopLoss);
-  const minTp1Distance = entryRef * TP1_PERCENT / 100; // 3% floor
-  const dynamicTp1Distance = rUnit * p.tpRangeMult; // Usually 2.0x R:R since stop is mid and TP is range mult
+  const minTp1Distance = tp1FloorDistance(entryRef, rUnit);
+  const dynamicTp1Distance = rUnit * p.tpRangeMult;
   const tp1Distance = Math.max(dynamicTp1Distance, minTp1Distance);
   const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;
   const takeProfit2 = isLong ? entryRef + tp1Distance * 1.5 : entryRef - tp1Distance * 1.5;
   const takeProfit = takeProfit1;
   const tpCapped = false;
 
-  // Gross R:R from actual levels (not the misleading ~2:1 claim).
-  const grossReward = Math.abs(takeProfit - entryRef);
-  const grossRisk = Math.abs(entryRef - stopLoss);
-  const actualRR = grossRisk > 0 ? grossReward / grossRisk : 0;
+  const actualRR = Math.abs(entryRef - stopLoss) > 0
+    ? Math.abs(takeProfit1 - entryRef) / Math.abs(entryRef - stopLoss)
+    : 0;
 
+  // Reward:risk backstop — a wide range (mid-stop far from entry) can make even
+  // the 3% TP floor a sub-1.2 R:R. Kept as the one hard reward-side gate; the
+  // frequency work elsewhere never touches this number.
   if (actualRR < p.minRR) {
     return base('ARMED', 'RR_BELOW_MIN', debug, { confidence: 0 });
   }
 
-  // Confidence SCORE 0-100.
-  // Scaled to the band the R:R gate actually admits, not to 0.5·range. With the
-  // old divisor the component topped out at 10.9/30 for any entry that could
-  // pass, and pointed the score at breakouts the gate was about to reject.
+  const rangeScore = (1 - Math.abs(bandPos - 0.4) / 0.6) * 10;
   const breakout = clamp01(breakoutDist / (range * maxExtension)) * 30;
   const trendStrength = clamp01(Math.abs(ema - emaPrev) / (emaPrev * 0.01)) * 20;
-  // Reward a range that sits in the middle of the allowed band.
-  const bandPos = (rangePct - p.minRangePct) / Math.max(1e-9, p.maxRangePct - p.minRangePct);
-  const rangeScore = (1 - Math.abs(bandPos - 0.4) / 0.6) * 10;
   const confidence = Math.round(40 + breakout + trendStrength + Math.max(0, rangeScore));
 
   const plan: Prev4hRangePlan = {
@@ -350,15 +353,15 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
     ema,
     emaPrev,
     entryRef,
-    limitEntryPrice,
     stopLoss,
-    stopCapped,
     takeProfit,
+    riskPerUnit,
     takeProfit1,
     takeProfit2,
-    riskPerUnit,
-    actualRR,
+    stopCapped,
+    limitEntryPrice,
     confidence,
+    actualRR,
     components: { breakout, trend: trendStrength, range: Math.max(0, rangeScore) }
   };
 

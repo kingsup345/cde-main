@@ -1,17 +1,22 @@
 // Exit policy shared by all four simulation bots.
 // ============================================================================
-// Operator decision (2026-09-08): every bot obeys the same three numbers —
+// Operator decision (2026-09-08): every bot obeys the same damage ceiling —
 //
 //   · a position may never lose more than MAX_LOSS_PERCENT (4.2%),
-//   · TP1 at TP1_PERCENT (3%) closes TP1_EXIT_FRACTION (half) of it,
-//   · the remainder runs to TP2_PERCENT (4.5%).
+//   · TP1 closes TP1_EXIT_FRACTION (half) of it, the remainder runs to TP2.
+//
+// TP1 is no longer a flat 3%: `tp1FloorDistance` sets it to max(1.5% of entry,
+// 1.5x the stop distance) so a low-volatility symbol is not handed a target it
+// cannot reach in-horizon. TP1_PERCENT / TP2_PERCENT remain as the ratio and
+// as Pro's own percentage exit until that engine is reworked.
 //
 // The stop is a CAP, not a replacement. Each bot keeps the stop its own
 // strategy computes — Path's range midpoint, Bybit's ATR multiple, intraday's
-// fixed 1.8% — and this module only pulls it in when it would have risked more
-// than 4.2%. That distinction is the point: the four bots exist to be compared,
-// and a shared stop level would erase three of the four differences that make
-// the comparison mean anything. What is shared is the ceiling on damage.
+// dynamic ATR/structure stop — and this module only pulls it in when it would
+// have risked more than 4.2%. That distinction is the point: the four bots
+// exist to be compared, and a shared stop level would erase three of the four
+// differences that make the comparison mean anything. What is shared is the
+// ceiling on damage.
 //
 // Every function here takes `isLong` explicitly and is symmetric under it.
 // That is not decoration: `evaluateProExit` computed
@@ -97,6 +102,20 @@ export function takeProfitLevels(
     takeProfit1: Math.max(entryPrice * (1 + s * tp1Percent / 100), 1e-8),
     takeProfit2: Math.max(entryPrice * (1 + s * tp2Percent / 100), 1e-8)
   };
+}
+
+/**
+ * The minimum distance (in price units) TP1 may sit from entry.
+ *
+ * Replaces the flat `entry × TP1_PERCENT` (3%) minimum. A 3% target is
+ * unreachable inside an intraday / 4H horizon on a ~1%-volatility major, so
+ * those trades used to time-stop out flat or reverse before the target. This
+ * floor still bans micro-scalps (>= 1.5% of entry) and still guarantees gross
+ * R:R >= 1.5 (>= 1.5x the stop distance), but lets a clean 1.8-2.5% move be a
+ * booked win. TP2 continues to scale off whatever TP1 the caller lands on.
+ */
+export function tp1FloorDistance(entryPrice: number, stopDistance: number): number {
+  return Math.max(entryPrice * 0.015, Math.abs(stopDistance) * 1.5);
 }
 
 /**

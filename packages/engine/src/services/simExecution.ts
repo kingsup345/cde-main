@@ -40,6 +40,7 @@ import {
   isInStreakCooldown,
   streakCooldownReason,
   streakCooldownFromHistory,
+  portfolioStreakCooldownUntil,
   adaptiveRiskPercentFromHistory,
   ClosedTradeRecord
 } from './adaptiveRisk';
@@ -52,6 +53,7 @@ export {
   adaptiveRiskPercentFromHistory,
   sizingMultiplierFromHistory,
   streakCooldownFromHistory,
+  portfolioStreakCooldownUntil,
   summarizeRecentPerformance,
   isInStreakCooldown
 } from './adaptiveRisk';
@@ -698,9 +700,10 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
     if (positions.some((p) => p.symbol === ev.symbol)) continue;
     if (newOrders.some((o) => o.symbol === ev.symbol) || pending.some((o) => o.symbol === ev.symbol)) continue;
     if (isInEntryCooldown(exitCooldown[ev.symbol])) continue;
-    // Post-losing-streak pause. The helpers were imported here but never
-    // called, so the streak brake was documented and inert.
+    // Post-losing-streak pause — per-symbol, and a book-level backstop for a
+    // run of losses spread across different symbols (regime, not symbol).
     if (isInStreakCooldown(streakCooldownFromHistory(closedTrades ?? [], ctx.equity, ev.symbol))) continue;
+    if (isInStreakCooldown(portfolioStreakCooldownUntil(closedTrades ?? [], ctx.equity))) continue;
     if (totalPositionCount >= maxPositions) continue;
     if (ev.tradeType === 'FUTURES' && futuresPositionCount >= maxFuturesPositions) continue;
 

@@ -472,6 +472,34 @@ export function streakCooldownReason(until: number, symbol?: string): string {
   return `הפוגה אחרי רצף הפסדים${symbolText} — כניסות חדשות חסומות עוד ${minutesLeft} דק'`;
 }
 
+// ── Book-level cooldown ──────────────────────────────────────────────────────
+// The per-symbol cooldown above assumes a losing streak means THAT symbol is
+// the problem. But a run of losses across DIFFERENT symbols means the regime is
+// the problem — and the per-symbol counter never trips because each symbol only
+// lost once or twice. This is the portfolio backstop: N consecutive losing
+// closes across ANY symbols pause every new entry.
+
+export const PORTFOLIO_STREAK_COOLDOWN_LOSSES = 3;
+export const PORTFOLIO_STREAK_COOLDOWN_MS = 60 * 60 * 1000;
+
+/** Book-level cooldown deadline (unfiltered history), or undefined when clear. */
+export function portfolioStreakCooldownUntil(
+  closed: ClosedTradeRecord[],
+  portfolioValue: number
+): number | undefined {
+  return computeSymbolStreakCooldownUntil(
+    summarizeRecentPerformance(closed, PERFORMANCE_WINDOW_SIZE, portfolioValue),
+    portfolioValue,
+    PORTFOLIO_STREAK_COOLDOWN_LOSSES,
+    PORTFOLIO_STREAK_COOLDOWN_MS
+  );
+}
+
+export function portfolioStreakCooldownReason(until: number): string {
+  const minutesLeft = Math.max(1, Math.ceil((until - Date.now()) / 60_000));
+  return `הפוגת תיק אחרי ${PORTFOLIO_STREAK_COOLDOWN_LOSSES} הפסדים רצופים — כל כניסה חדשה חסומה עוד ${minutesLeft} דק'`;
+}
+
 // ── Time stops for the H1 engines (Legacy + Pro) ─────────────────────────────
 //
 // A stop answers "was I wrong about direction". A time stop answers a different

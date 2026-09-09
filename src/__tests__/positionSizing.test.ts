@@ -165,63 +165,39 @@ describe('Confidence Threshold Enforcement', () => {
   });
 });
 
-describe('Prev4hRange TP ladder (flat 3% / 4.5% — operator rule 2026-09-08)', () => {
-  // The bot's own `H + range × tpRangeMult` target was replaced by the shared
-  // flat ladder so no position ever takes profit below +3%. TP1/TP2 are now
-  // fixed percentages of the entry, independent of breakout distance or range.
-  it('Test 5: near-touch breakout → TP1 at +3%, TP2 at +4.5%', () => {
-    // Wide range (4%) so stop distance (entry≈104 → mid=102 → ~1.9%) clears the RISK_VS_COST gate (needs >0.7%).
-    const H = 104;
-    const L = 100;
-    const { h1, now } = buildH1ForPrevBar(H, L, 90);
-    const currentPrice = H + 0.0001; // ~d=0 breakout
-    const ev = evaluatePrev4hRange({
-      symbol: 'TEST',
-      h1,
-      currentPrice,
-      now,
-      params: { ...DEFAULT_PREV4H_RANGE_PARAMS, minH4Bars: 2, minRR: 0, minConfidence: 0, minRangePct: 0, maxRangePct: 1 }
-    });
+describe('Prev4hRange TP ladder — stop-relative floor (tp1FloorDistance)', () => {
+  // TP1 = max(range-midpoint target, tp1FloorDistance) where the floor is
+  // max(1.5% of entry, 1.5× the stop). With the stop at the range midpoint the
+  // 1.5×stop term dominates, so gross R:R lands at a clean 1.5 regardless of
+  // breakout distance or range — no longer a flat 3%.
+  const wideParams = { ...DEFAULT_PREV4H_RANGE_PARAMS, minH4Bars: 2, minRR: 0, minConfidence: 0, minRangePct: 0, maxRangePct: 1 };
+
+  it('Test 5: near-touch breakout → TP1 = entry + 1.5×stop, R:R ≈ 1.5', () => {
+    const { h1, now } = buildH1ForPrevBar(104, 100, 90);
+    const ev = evaluatePrev4hRange({ symbol: 'TEST', h1, currentPrice: 104.0001, now, params: wideParams });
     const plan = readPrev4hRangePlan(ev);
     expect(plan).toBeDefined();
-    expect(plan!.takeProfit1).toBeCloseTo(plan!.entryRef * 1.03, 4);
-    expect(plan!.takeProfit2).toBeCloseTo(plan!.entryRef * 1.045, 4);
+    expect(plan!.takeProfit1 - plan!.entryRef).toBeCloseTo(1.5 * plan!.riskPerUnit, 4);
+    expect(plan!.takeProfit2 - plan!.entryRef).toBeCloseTo(1.5 * (plan!.takeProfit1 - plan!.entryRef), 4);
+    expect(plan!.actualRR).toBeCloseTo(1.5, 3);
   });
 
-  it('Test 6: extended breakout → SAME flat TP1 +3% / TP2 +4.5% (not range-scaled)', () => {
-    const H = 104;
-    const L = 100;
-    const range = H - L;
-    const { h1, now } = buildH1ForPrevBar(H, L, 90);
-    const currentPrice = H + range * 0.1; // Extended but within admissible band
-    const ev = evaluatePrev4hRange({
-      symbol: 'TEST',
-      h1,
-      currentPrice,
-      now,
-      params: { ...DEFAULT_PREV4H_RANGE_PARAMS, minH4Bars: 2, minRR: 0, minConfidence: 0, minRangePct: 0, maxRangePct: 1 }
-    });
+  it('Test 6: extended breakout → SAME 1.5×stop floor (not range-scaled)', () => {
+    const range = 4;
+    const { h1, now } = buildH1ForPrevBar(104, 100, 90);
+    const ev = evaluatePrev4hRange({ symbol: 'TEST', h1, currentPrice: 104 + range * 0.1, now, params: wideParams });
     const plan = readPrev4hRangePlan(ev);
     expect(plan).toBeDefined();
-    expect(plan!.takeProfit1).toBeCloseTo(plan!.entryRef * 1.03, 4);
-    expect(plan!.takeProfit2).toBeCloseTo(plan!.entryRef * 1.045, 4);
+    expect(plan!.takeProfit1 - plan!.entryRef).toBeCloseTo(1.5 * plan!.riskPerUnit, 4);
+    expect(plan!.actualRR).toBeCloseTo(1.5, 3);
   });
 
-  it('Test 7: Entry=13.3119, SL=13.0723, TP=13.7113 → Gross RR ≈ 1.67', () => {
-    const H = 13.2853;
-    const L = 12.8593;
-    const { h1, now } = buildH1ForPrevBar(H, L, 12.5);
-    const currentPrice = 13.3119;
-    const ev = evaluatePrev4hRange({
-      symbol: 'TEST',
-      h1,
-      currentPrice,
-      now,
-      params: { ...DEFAULT_PREV4H_RANGE_PARAMS, minH4Bars: 2, minRR: 0, minConfidence: 0, minRangePct: 0, maxRangePct: 1 }
-    });
+  it('Test 7: Entry=13.3119, mid-stop=13.0723 → R:R ≈ 1.5 (was 1.67 under the flat 3% floor)', () => {
+    const { h1, now } = buildH1ForPrevBar(13.2853, 12.8593, 12.5);
+    const ev = evaluatePrev4hRange({ symbol: 'TEST', h1, currentPrice: 13.3119, now, params: wideParams });
     const plan = readPrev4hRangePlan(ev);
     expect(plan).toBeDefined();
-    expect(plan!.actualRR).toBeCloseTo(1.67, 2);
+    expect(plan!.actualRR).toBeCloseTo(1.5, 2);
   });
 });
 

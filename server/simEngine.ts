@@ -139,8 +139,8 @@ const intradayStrategy: SimEngineStrategy = {
           // (DEFAULT_SIM_CONFIG.minConfidenceOverride = 52). The old hardcoded
           // 40 silently contradicted both the UI default and ALG_intraday.md.
           minConfidenceOverride: typeof input.config.minConfidenceOverride === 'number' ? input.config.minConfidenceOverride : INTRADAY_MIN_CONFIDENCE,
-           maxPositions: input.config.maxPositions ?? 2, // 2 × 10% = 20% = totalExposureCap
-          maxFuturesPositions: input.config.maxFuturesPositions || 2
+          maxPositions: input.config.maxPositions ?? DEFAULT_INTRADAY_PARAMS.maxOpenPositions, // 2 × 10% = 20% = totalExposureCap
+          maxFuturesPositions: input.config.maxFuturesPositions ?? DEFAULT_INTRADAY_PARAMS.maxOpenFutures
         }
       };
 

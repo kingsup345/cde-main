@@ -45,8 +45,15 @@ import {
 import {
   isInStreakCooldown,
   streakCooldownFromHistory,
+  portfolioStreakCooldownUntil,
+  portfolioStreakCooldownReason,
   ClosedTradeRecord
 } from './adaptiveRisk';
+import {
+  evaluateCorrelationGate,
+  toPositionDirection,
+  type CorrelatedHolding
+} from './correlation';
 import {
   DAILY_DRAWDOWN_BLOCK_PERCENT,
   WEEKLY_DRAWDOWN_LOCK_PERCENT,
@@ -525,6 +532,20 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
 
   const belowFloor = isBelowCapitalFloor(ctx.initialAmount, ctx.equity);
 
+  // Correlation cluster gate — same helper the intraday and Path bots use.
+  // A trend-following breakout bot with leverage is exactly the case where
+  // five correlated longs opening on one market-wide breakout is one bet.
+  const h1BySymbol: Record<string, Candle[] | undefined> = {};
+  for (const [base, set] of Object.entries(ctx.candlesBySymbol)) {
+    if (set?.h1?.length) h1BySymbol[base] = set.h1;
+  }
+  const correlationBook: CorrelatedHolding[] = [
+    ...trades.map((lt) => ({ symbol: lt.base, direction: toPositionDirection(lt.side) })),
+    ...ctx.pending
+      .filter((o) => ENTRY_SIDES.has(o.side))
+      .map((o) => ({ symbol: o.symbol, direction: toPositionDirection(o.side) }))
+  ];
+
   for (const ev of ranked) {
     if (belowFloor) {
       blockEntry(
@@ -551,8 +572,23 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       blockEntry(ev, 'STREAK_COOLDOWN', 'צינון אחרי רצף הפסדים');
       continue;
     }
+    const bookCooldown = portfolioStreakCooldownUntil(ctx.closedTradeMetrics ?? [], ctx.equity);
+    if (isInStreakCooldown(bookCooldown)) {
+      blockEntry(ev, 'STREAK_COOLDOWN', portfolioStreakCooldownReason(bookCooldown!));
+      continue;
+    }
     if (logicalTradeCount >= ctx.maxConcurrentTrades) {
       blockEntry(ev, 'MAX_CONCURRENT', `${logicalTradeCount}/${ctx.maxConcurrentTrades} עסקאות פתוחות — אין מקום`);
+      continue;
+    }
+    const corr = evaluateCorrelationGate({
+      symbol: ev.symbol,
+      direction: toPositionDirection(side),
+      held: correlationBook,
+      candlesBySymbol: h1BySymbol
+    });
+    if (!corr.allowed) {
+      blockEntry(ev, 'CORRELATION', corr.reason ?? 'ריכוז יתר בנכסים מתואמים');
       continue;
     }
 
@@ -609,6 +645,7 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       logicalTradeCount++;
       openLogicalKeys.add(key);
       pendingEntryKeys.add(key);
+      correlationBook.push({ symbol: ev.symbol, direction: toPositionDirection(side) });
     }
   }
 

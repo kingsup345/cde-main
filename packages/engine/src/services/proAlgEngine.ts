@@ -77,7 +77,7 @@ import {
 } from '../utils/technicalAnalysis';
 import { calculateMACD, calculateStochastic } from '../utils/advancedTechnicalAnalysis';
 import type { HistoricalPrice, TechnicalIndicators } from '../types/crypto';
-import { positionPnlPercent, TP2_PERCENT, TP1_EXIT_FRACTION } from './exitPolicy';
+import { positionPnlPercent, reachedStop, reachedTarget, TP2_PERCENT, TP1_EXIT_FRACTION } from './exitPolicy';
 
 // ── §2 — indicator votes ─────────────────────────────────────────────────────
 
@@ -146,9 +146,9 @@ function voteMa(currentPrice: number, ma20: number, signals: ProIndicatorSignal[
   if (!(ma20 > 0)) { pushVote(signals, 'MA(20)', w, 'HOLD', 50, 'אין מספיק היסטוריה לממוצע נע 20'); return; }
   const distPct = ((currentPrice - ma20) / ma20) * 100;
   if (distPct < -2) pushVote(signals, 'MA(20)', w, 'BUY', 80, `מחיר ${Math.abs(distPct).toFixed(1)}% מתחת ל-MA20 ($${formatDynamicPrice(ma20)}) — oversold`);
-  else if (distPct < -0.1) pushVote(signals, 'MA(20)', w, 'BUY', 60, `מחיר מתחת ל-MA20 (${Math.abs(distPct).toFixed(1)}%) —轻度 oversold`);
+  else if (distPct < -0.1) pushVote(signals, 'MA(20)', w, 'BUY', 60, `מחיר מתחת ל-MA20 (${Math.abs(distPct).toFixed(1)}%) — קל oversold`);
   else if (distPct > 2) pushVote(signals, 'MA(20)', w, 'SELL', 80, `מחיר ${distPct.toFixed(1)}% מעל MA20 ($${formatDynamicPrice(ma20)}) — overbought`);
-  else if (distPct > 0.1) pushVote(signals, 'MA(20)', w, 'SELL', 60, `מחיר מעל MA20 (${distPct.toFixed(1)}%) —轻度 overbought`);
+  else if (distPct > 0.1) pushVote(signals, 'MA(20)', w, 'SELL', 60, `מחיר מעל MA20 (${distPct.toFixed(1)}%) — קל overbought`);
   else pushVote(signals, 'MA(20)', w, 'HOLD', 70, 'מחיר צמוד ל-MA20');
 }
 
@@ -247,6 +247,8 @@ export interface ProSignalResult {
   totalWeight: number;
   /** §2's formula, verbatim. 0-100. */
   confidence: number;
+  /** ATR(14) as a percent of price — the scale for the ATR-scaled stop. */
+  atrPercent: number;
   signals: ProIndicatorSignal[];
   /** Full per-indicator breakdown, for the technical-score line in the UI. */
   indicators: TechnicalIndicators & { isDowntrend?: boolean; ema50?: number; ema200?: number };
@@ -284,12 +286,21 @@ export function computeProSignal(
   const ema200Series = calculateEMA(prices, 200);
   const ema50 = ema50Series[ema50Series.length - 1] ?? currentPrice;
   const ema200 = ema200Series[ema200Series.length - 1] ?? currentPrice;
-  const ema50Prev = ema50Series[ema50Series.length - 2] ?? ema50;
-  const ema50Prev2 = ema50Series[ema50Series.length - 3] ?? ema50Prev;
-  
+
   const isDowntrend = ema50 < ema200 && currentPrice < ema50;
-  // Alternative condition mentioned: negative slope in last 3 candles
-  // const isDowntrend = (ema50 < ema200 && currentPrice < ema50) || (ema50 < ema50Prev && ema50Prev < ema50Prev2);
+
+  // ATR% over the last 14 bars — the scale for "is price near its trend mean".
+  const atrPercent = (() => {
+    const n = Math.min(14, candles.length - 1);
+    if (n <= 0 || !(currentPrice > 0)) return 0;
+    let sum = 0;
+    for (let i = candles.length - n; i < candles.length; i++) {
+      const c = candles[i];
+      const prev = candles[i - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close));
+    }
+    return (sum / n) / currentPrice * 100;
+  })();
 
   const signals: ProIndicatorSignal[] = [];
   voteRsi(rsi, signals);
@@ -319,7 +330,7 @@ export function computeProSignal(
   const maxScore = Math.max(buyScore, sellScore, holdScore);
   // BUY wins a draw with HOLD so a signal that ties the neutral bucket is
   // allowed through — a HOLD tie is not "safer", it is an unexpressed BUY.
-  const action: 'BUY' | 'SELL' | 'HOLD' =
+  let action: 'BUY' | 'SELL' | 'HOLD' =
     maxScore === buyScore ? 'BUY' : maxScore === sellScore ? 'SELL' : 'HOLD';
 
   const secondScore = [buyScore, sellScore, holdScore].sort((a, b) => b - a)[1] ?? 0;
@@ -340,7 +351,40 @@ export function computeProSignal(
   // baseline (50) so high confidence ONLY ever accompanies a directional vote —
   // "confidence ≥ 70% ⟹ a BUY is firing" holds true, and the number the user
   // sees matches the entry decision.
-  const confidence = Number(Math.max(0, Math.min(100, action === 'BUY' ? rawConfidence : Math.min(rawConfidence, 50))).toFixed(1));
+  let confidence = Number(Math.max(0, Math.min(100, action === 'BUY' ? rawConfidence : Math.min(rawConfidence, 50))).toFixed(1));
+
+  // ── Trend-participation lane ──────────────────────────────────────────────
+  // The eight bucket votes are 7/8 mean-reversion, so `action` is HOLD through
+  // almost every trending bar — Pro only ever bought capitulation dips (and
+  // isDowntrend then blocked most of those). This lane lets an established EMA
+  // trend that is NOT over-extended from its own EMA50 trade WITH the trend, a
+  // call the bucket vote structurally cannot make. It only ever turns HOLD into
+  // a direction; it never overrides an opposing bucket vote.
+  const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
+  // "not extended" — price is within 3×ATR of the EMA50, i.e. riding the trend
+  // line or pulling back to it, not chasing a parabolic move away from it.
+  const distFromEma50Pct = ema50 > 0 ? Math.abs(currentPrice - ema50) / ema50 * 100 : Infinity;
+  const notExtended = atrPercent > 0 && distFromEma50Pct <= 3 * atrPercent;
+  // EMA structure only — no MACD gate. A pullback deep enough to bring price
+  // back to the EMA50 almost always turns the MACD histogram mildly negative
+  // on this timeframe; requiring MACD-bullish is what made the old bot unable
+  // to trade a trend at all. `price > ema50 > ema200` + notExtended is a
+  // sufficient "established uptrend, not chasing" condition, and the bucket
+  // vote still vetoes (this only ever promotes a HOLD).
+  const trendLaneUp = ema50 > ema200 && currentPrice > ema50 && notExtended;
+  const trendLaneDown = ema50 < ema200 && currentPrice < ema50 && notExtended;
+  if (action === 'HOLD' && trendLaneUp) {
+    action = 'BUY';
+  } else if (action === 'HOLD' && trendLaneDown) {
+    action = 'SELL';
+  }
+  if (action === 'BUY' && trendLaneUp) {
+    // Boost is BUY-only — a trend-down SELL still tops out at the neutral 50
+    // cap so it does not start closing positions earlier than today.
+    const trendStrength = clamp01(Math.abs(ema50 - ema200) / (ema200 * 0.02)); // 2% EMA spread → full
+    const pullbackQuality = clamp01(1 - distFromEma50Pct / (3 * atrPercent));
+    confidence = Math.max(confidence, Number((58 + trendStrength * 22 + pullbackQuality * 20).toFixed(1)));
+  }
 
   return {
     action,
@@ -349,6 +393,7 @@ export function computeProSignal(
     holdScore,
     totalWeight,
     confidence,
+    atrPercent,
     signals,
     indicators: { rsi, ma20, volumeTrend, bollingerBands: bb, volumeProfile: vp, macd, stochastic, isDowntrend, ema50, ema200 }
   };
@@ -466,13 +511,41 @@ export const PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD = 80;
 export const PRO_ALLOCATION_DEFAULT_PERCENT = 0.10;
 export const PRO_ALLOCATION_HIGH_PERCENT = 0.10;
 
-// ── §5 — fixed exit percentages ──────────────────────────────────────────────
+// ── §5 — exit levels ─────────────────────────────────────────────────────────
 
 // TP2 and the partial fraction come from the shared exit policy so all four
-// bots ladder out the same way; §5's own two numbers stay defined here.
-/** §5, literally: "Take Profit 3%, Stop Loss 4.2%". Not ATR-scaled. */
+// bots ladder out the same way.
+/** Fallback percentages for a position opened before ATR-scaled levels, and
+ *  the hard ceiling on the stop. §5 named a flat 3% / 4.2%; the stop is now
+ *  ATR-scaled (proStopTpLevels) with 4.2% only as the cap — a flat 4.2% stop
+ *  against a 3% target is a 0.7 reward:risk on every trade. */
 export const PRO_TAKE_PROFIT_PERCENT = 3;
 export const PRO_STOP_LOSS_PERCENT = 4.2;
+/** ATR multiple for the stop, and the floor it may not go below. */
+export const PRO_STOP_ATR_MULT = 1.6;
+export const PRO_STOP_MIN_PERCENT = 1.8;
+
+/**
+ * ATR-scaled stop + a stop-relative TP ladder, as absolute prices.
+ * stop distance = clamp(atrPercent × 1.6, 1.8%, 4.2%); TP1 = max(1.5%, 1.5×
+ * stop); TP2 = 1.5 × TP1. Mirrors `tp1FloorDistance` — reward:risk floors at
+ * 1.5 instead of the old inverted 0.7.
+ */
+export function proStopTpLevels(
+  entryPrice: number,
+  atrPercent: number,
+  isLong: boolean
+): { stopLoss: number; takeProfit1: number; takeProfit2: number } {
+  const stopPct = Math.min(PRO_STOP_LOSS_PERCENT, Math.max(PRO_STOP_MIN_PERCENT, atrPercent * PRO_STOP_ATR_MULT));
+  const tp1Pct = Math.max(1.5, stopPct * 1.5);
+  const tp2Pct = tp1Pct * 1.5;
+  const s = isLong ? 1 : -1;
+  return {
+    stopLoss: Math.max(entryPrice * (1 - s * stopPct / 100), 1e-8),
+    takeProfit1: Math.max(entryPrice * (1 + s * tp1Pct / 100), 1e-8),
+    takeProfit2: Math.max(entryPrice * (1 + s * tp2Pct / 100), 1e-8)
+  };
+}
 
 // ── Warm-up floor ─────────────────────────────────────────────────────────────
 
@@ -491,6 +564,11 @@ export interface ProPositionView {
   isLong?: boolean;
   /** Set once TP1 has taken its half; the remainder then runs to TP2. */
   tp1Hit?: boolean;
+  /** ATR-scaled levels as absolute prices (proStopTpLevels), reanchored to the
+   *  fill by fillDueOrders. Absent → fall back to the flat §5 percentages. */
+  stopLoss?: number;
+  takeProfit1?: number;
+  takeProfit2?: number;
 }
 
 export interface ProExitDecision {
@@ -513,28 +591,32 @@ export function evaluateProExit(
   minConfidence: number
 ): ProExitDecision {
   const isLong = pos.isLong ?? true;
-  // Was `(current - entry) / entry` inline — the LONG formula. Correct for this
-  // bot today (spot never shorts) but wrong the moment it isn't, and wrong by
-  // sign rather than by magnitude: a winning short would have read as a loss
-  // and tripped the stop. The shared helper is symmetric by construction.
   const changePercent = positionPnlPercent(pos.entryPrice, currentPrice, isLong);
 
-  if (changePercent <= -PRO_STOP_LOSS_PERCENT) {
-    return { shouldExit: true, exitType: 'FULL', reason: `Stop Loss: שינוי ${changePercent.toFixed(2)}% <= -${PRO_STOP_LOSS_PERCENT}%` };
+  // Price-based, symmetric under isLong. A position that carries ATR-scaled
+  // levels uses them; one opened before this change falls back to the flat §5
+  // percentages so its behaviour is unchanged.
+  const s = isLong ? 1 : -1;
+  const stopLoss = pos.stopLoss ?? pos.entryPrice * (1 - s * PRO_STOP_LOSS_PERCENT / 100);
+  const takeProfit1 = pos.takeProfit1 ?? pos.entryPrice * (1 + s * PRO_TAKE_PROFIT_PERCENT / 100);
+  const takeProfit2 = pos.takeProfit2 ?? pos.entryPrice * (1 + s * TP2_PERCENT / 100);
+
+  if (reachedStop(currentPrice, stopLoss, isLong)) {
+    return { shouldExit: true, exitType: 'FULL', reason: `Stop Loss ב-${stopLoss.toFixed(6)} (שינוי ${changePercent.toFixed(2)}%)` };
   }
   // TP2 first: past it, there is nothing left to leave running.
-  if (changePercent >= TP2_PERCENT) {
-    return { shouldExit: true, exitType: 'FULL', reason: `TP2: שינוי ${changePercent.toFixed(2)}% >= ${TP2_PERCENT}%` };
+  if (reachedTarget(currentPrice, takeProfit2, isLong)) {
+    return { shouldExit: true, exitType: 'FULL', reason: `TP2 ב-${takeProfit2.toFixed(6)} (שינוי ${changePercent.toFixed(2)}%)` };
   }
-  if (!pos.tp1Hit && changePercent >= PRO_TAKE_PROFIT_PERCENT) {
+  if (!pos.tp1Hit && reachedTarget(currentPrice, takeProfit1, isLong)) {
     return {
       shouldExit: true,
       exitType: 'PARTIAL_50',
-      reason: `TP1: שינוי ${changePercent.toFixed(2)}% >= ${PRO_TAKE_PROFIT_PERCENT}% — סגירת ${(TP1_EXIT_FRACTION * 100).toFixed(0)}%`
+      reason: `TP1 ב-${takeProfit1.toFixed(6)} (שינוי ${changePercent.toFixed(2)}%) — סגירת ${(TP1_EXIT_FRACTION * 100).toFixed(0)}%`
     };
   }
   // The runner gave TP1 back — bank the remainder rather than round-trip it.
-  if (pos.tp1Hit && changePercent < PRO_TAKE_PROFIT_PERCENT) {
+  if (pos.tp1Hit && !reachedTarget(currentPrice, takeProfit1, isLong)) {
     return { shouldExit: true, exitType: 'FULL', reason: `חזרה מתחת ל-TP1 אחרי יציאה חלקית (${changePercent.toFixed(2)}%)` };
   }
   if (currentSignal.action === 'SELL' && currentSignal.confidence >= minConfidence) {

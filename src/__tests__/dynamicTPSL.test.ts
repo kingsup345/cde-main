@@ -136,7 +136,7 @@ describe('1. Dynamic SL computation', () => {
 // ─── 2. Dynamic TP Computation ─────────────────────────────────────────────
 
 describe('2. Dynamic TP computation', () => {
-  it('TP1 is at least 3% from entry', () => {
+  it('TP1 floor is stop-relative (>=1.5% of entry AND >=1.5x the stop), not a flat 3%', () => {
     const entry = 100;
     const atr5 = 1;
     const plan = buildRiskPlan({
@@ -144,13 +144,14 @@ describe('2. Dynamic TP computation', () => {
       entryPrice: entry,
       atr5,
       atr15: atr5,
-      equity: 10_000,
-      stopReference: entry * 0.98, // 2% SL
+      stopReference: entry * 0.98, // 2% SL → clamped to maxStopPercent 1.5%
       targetReference: entry * 1.01, // 1% structural target (too close)
+      equity: 10_000,
       params: withParams({ minStopAtrMult: 0.8, maxStopAtrMult: 2.5, minStopPercent: 0.12, maxStopPercent: 1.5, tp1RewardRisk: 1.5, tp2RewardRisk: 2.5 })
     });
     expect(plan.approved).toBe(true);
-    expect(plan.rewardPercent).toBeGreaterThanOrEqual(FIXED_TP_PERCENT - 0.01);
+    expect(plan.rewardPercent).toBeGreaterThanOrEqual(1.5 - 0.01);                // absolute 1.5% floor
+    expect(plan.grossRewardRisk).toBeGreaterThanOrEqual(1.5 - 0.01);             // >= 1.5x the stop
   });
 
   it('TP1 uses the FARTHER of ATR-based and structure-based target', () => {
@@ -177,18 +178,18 @@ describe('2. Dynamic TP computation', () => {
 // ─── 3. TP Impossible Gate ──────────────────────────────────────────────────
 
 describe('3. TP impossible gate', () => {
-  it('rejects trade when SL is too wide for minimum TP', () => {
+  it('rejects trade when the R:R the floor guarantees is still below minRewardRisk', () => {
     const entry = 100;
-    const atr5 = 5; // 5% ATR
-    // With tp1RewardRisk=0.8 and minRewardRisk=1.2, the R:R gate triggers
-    // when SL is at the 4.2% cap and TP is only 3% (R:R = 1.0 < 1.2)
+    const atr5 = 5; // 5% ATR → stop pinned to the 4.2% cap
+    // tp1FloorDistance guarantees grossRR >= 1.5 (the 1.5x-stop term). Push
+    // minRewardRisk above that (2.0) and the gate must still fire.
     const plan = buildRiskPlan({
       ...baseInput,
       entryPrice: entry,
       atr5,
       atr15: atr5,
       equity: 10_000,
-      params: withParams({ minStopAtrMult: 0.8, maxStopAtrMult: 2.5, minStopPercent: 0.12, maxStopPercent: 6, tp1RewardRisk: 0.8, tp2RewardRisk: 1.2, minRewardRisk: 1.2 })
+      params: withParams({ minStopAtrMult: 0.8, maxStopAtrMult: 2.5, minStopPercent: 0.12, maxStopPercent: 6, tp1RewardRisk: 0.8, tp2RewardRisk: 1.2, minRewardRisk: 2.0 })
     });
     expect(plan.approved).toBe(false);
     expect(plan.blockReason).toMatch(/NO TRADE/);
@@ -450,7 +451,7 @@ describe('9. Edge cases', () => {
     expect(plan.stopLoss).toBeLessThan(entry);
     expect(plan.takeProfit1).toBeGreaterThan(entry);
     expect(plan.riskPercent).toBeGreaterThan(0);
-    expect(plan.rewardPercent).toBeGreaterThanOrEqual(FIXED_TP_PERCENT - 0.01);
+    expect(plan.rewardPercent).toBeGreaterThanOrEqual(1.5 - 0.01); // stop-relative floor
   });
 
   it('rejects when entry price is zero or negative', () => {
@@ -492,18 +493,18 @@ describe('9. Edge cases', () => {
     expect(plan.riskPercent).toBeLessThanOrEqual(MAX_LOSS_PERCENT);
   });
 
-  it('rejects when TP is impossible even after SL tightening', () => {
+  it('rejects when the floor-guaranteed R:R is still below a raised minRewardRisk', () => {
     const entry = 100;
-    const atr5 = 5; // 5% ATR
-    // With tp1RewardRisk=0.8 and minRewardRisk=1.2, even at the 4.2% cap
-    // the R:R (3% / 4.2% = 0.71) fails the gate
+    const atr5 = 5; // 5% ATR → stop at the 4.2% cap
+    // The stop-relative floor guarantees grossRR >= 1.5; minRewardRisk 2.0
+    // is above that, so the gate still fires.
     const plan = buildRiskPlan({
       ...baseInput,
       entryPrice: entry,
       atr5,
       atr15: atr5,
       equity: 10_000,
-      params: withParams({ minStopAtrMult: 0.8, maxStopAtrMult: 2.5, minStopPercent: 0.12, maxStopPercent: 6, tp1RewardRisk: 0.8, tp2RewardRisk: 1.2, minRewardRisk: 1.2 })
+      params: withParams({ minStopAtrMult: 0.8, maxStopAtrMult: 2.5, minStopPercent: 0.12, maxStopPercent: 6, tp1RewardRisk: 0.8, tp2RewardRisk: 1.2, minRewardRisk: 2.0 })
     });
     expect(plan.approved).toBe(false);
     expect(plan.blockReason).toMatch(/NO TRADE/);

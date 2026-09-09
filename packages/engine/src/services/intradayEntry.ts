@@ -319,7 +319,10 @@ export function confirmEntry5M(
   if (meanRevVolumeTooLow) blockers.push(`נפח MEAN_REVERSION נמוך מדי (${triggerVolumeRelative.toFixed(2)}x < ${params.minMeanReversionRelativeVolume}x) — NO TRADE`);
   if (volumeTooLow) blockers.push(`נפח 5M נמוך מדי (${triggerVolumeRelative.toFixed(2)}x) — NO TRADE (§27)`);
 
-  const confirmed = gatesPassed && entryScore >= params.entryScoreMin && !volumeTooLow && !meanRevVolumeTooLow && chasePenalty === 0;
+  // chasePenalty is no longer a hard veto — it already subtracts up to 30 from
+  // entryScore above, so a real chase fails entryScoreMin on its own while a
+  // 1.3-1.6 ATR overshoot (normal 5M behaviour) only costs a few points.
+  const confirmed = gatesPassed && entryScore >= params.entryScoreMin && !volumeTooLow && !meanRevVolumeTooLow;
 
   if (!confirmed && entryScore < params.entryScoreMin) {
     blockers.push(`EntryScore ${entryScore} מתחת לסף ${params.entryScoreMin}`);

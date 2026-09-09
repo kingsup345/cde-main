@@ -42,10 +42,10 @@ describe('shared sim defaults', () => {
   });
 
   it('keeps the floors distinct — they are calibrated per engine', () => {
-    expect(SIM_MIN_CONFIDENCE.intraday).toBe(52);
-    // Pro's operator flat bar: 70 — the bot enters a BUY above it (per-risk
+    expect(SIM_MIN_CONFIDENCE.intraday).toBe(50);
+    // Pro's operator flat bar: 50 — the bot enters a BUY above it (per-risk
     // §3 values remain exported as reference only).
-    expect(SIM_MIN_CONFIDENCE.pro).toBe(70);
+    expect(SIM_MIN_CONFIDENCE.pro).toBe(50);
     // Prev-4H Range — a 0-100 signal score (breakout distance + trend + range),
     // same scale family as the others; 55 is its own calibration.
     expect(SIM_MIN_CONFIDENCE.path).toBe(55);

@@ -21,7 +21,9 @@ import {
   buildProEvaluation,
   MIN_PRO_CANDLES,
   DAILY_DRAWDOWN_BLOCK_PERCENT,
-  WEEKLY_DRAWDOWN_LOCK_PERCENT
+  WEEKLY_DRAWDOWN_LOCK_PERCENT,
+  isInStreakCooldown,
+  portfolioStreakCooldownUntil
 } from '@cde/engine/execution';
 import { computeProSignal, proMinConfidence, type ProSignalResult, type ProRiskLevel } from '@cde/engine/analysis';
 import { SignalEvaluation } from '@cde/engine';
@@ -98,9 +100,13 @@ const proStrategy: SimEngineStrategy = {
     // run a separate createGenericSimEngine closure with separate state and a
     // separate KV store, so the only thing the three share here is the threshold
     // constant — a loss in one bot can never halt another.
+    // Also halt new entries after a book-level losing streak (Pro had no
+    // per-symbol streak cooldown at all — §4 gates on price/slots/confidence
+    // only — so this is its only losing-streak brake).
     const breakerTripped =
       input.dailyDrawdownPercent >= DAILY_DRAWDOWN_BLOCK_PERCENT ||
-      input.weeklyDrawdownPercent >= WEEKLY_DRAWDOWN_LOCK_PERCENT;
+      input.weeklyDrawdownPercent >= WEEKLY_DRAWDOWN_LOCK_PERCENT ||
+      isInStreakCooldown(portfolioStreakCooldownUntil(input.closedTradeMetrics ?? [], input.equity));
 
     // The exit check (§5's fixed %, §4's flip-to-SELL) needs each held
     // symbol's CURRENT signal, independent of whether that symbol currently
