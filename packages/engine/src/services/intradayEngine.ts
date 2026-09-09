@@ -216,7 +216,7 @@ export function evaluateIntradayDecision(input: IntradayDecisionInput): Intraday
     regimePassed,
     setupCandidates: setup ? setup.candidateCount : 0,
     entryCandidates: entry ? entry.confirmationCount : 0,
-    costBlocked: gate === 'COST' || gate === 'SPREAD',
+    costBlocked: gate === 'COST' || gate === 'SPREAD' || gate === 'RISK_VS_COST',
     riskBlocked: gate === 'RISK' && outcome === 'NO_SIGNAL',
     approved: outcome === 'SIGNAL',
     executed: false
@@ -385,8 +385,14 @@ export function evaluateIntradayDecision(input: IntradayDecisionInput): Intraday
     params
   });
   if (!cost.approved) {
-    logs.push(`[${symbol}] COST — ${cost.reason}`);
-    return finalize(symbol, 'COST', 'NO_SIGNAL', regime, setup, entry, cost, effectiveRisk, logs, params, now, mkFunnel('COST', 'NO_SIGNAL', setup, entry), tradeType);
+    // 'RISK_VS_COST' and 'SPREAD' report themselves; anything else is the §25
+    // reward-vs-cost gate. SPREAD is also reachable earlier (GATE 6/7) but the
+    // share-of-move spread check lives inside evaluateCostEdge, so honour it here.
+    const costGate: DecisionGate = cost.blockGate === 'RISK_VS_COST'
+      ? 'RISK_VS_COST'
+      : cost.blockGate === 'SPREAD' ? 'SPREAD' : 'COST';
+    logs.push(`[${symbol}] ${costGate} — ${cost.reason}`);
+    return finalize(symbol, costGate, 'NO_SIGNAL', regime, setup, entry, cost, effectiveRisk, logs, params, now, mkFunnel(costGate, 'NO_SIGNAL', setup, entry), tradeType);
   }
   logs.push(`[${symbol}] COST OK — ${cost.reason}`);
 

@@ -90,7 +90,7 @@ export {
 
 // ── Intraday engine configuration ────────────────────────────────────────────
 export type { Regime1HType, SetupType, Direction, EntryTrigger, DecisionGate, IntradayParams } from './services/intradayParams';
-export { DEFAULT_INTRADAY_PARAMS, RISK_VARIANTS, withParams } from './services/intradayParams';
+export { DEFAULT_INTRADAY_PARAMS, RISK_VARIANTS, withParams, POSITION_TARGET_PCT } from './services/intradayParams';
 
 // ── Correlation gate ─────────────────────────────────────────────────────────
 export type { PositionDirection, CorrelatedHolding, CorrelationMatch, CorrelationGateInput, CorrelationGateResult } from './services/correlation';

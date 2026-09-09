@@ -234,12 +234,13 @@ describe('4. Immediate SL execution (no candle-close confirmation)', () => {
       plannedStopDistance: 1.5
     };
 
-    // Price touches SL within the candle but closes above
+    // Price touches SL within the candle but closes above — the SL is a bare
+    // live-price touch for every setup type (close-confirmation was removed).
     const exit = evaluateIntradayExit(position, {
       price: 98.4, // Below SL
       now: Date.now(),
       atr5,
-      params: withParams({ meanReversionCloseConfirmStop: true }),
+      params: withParams(),
       portfolio: { dailyDrawdownPercent: 0, weeklyDrawdownPercent: 0 }
     });
 

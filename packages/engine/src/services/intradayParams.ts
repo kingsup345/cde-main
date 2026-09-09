@@ -27,6 +27,12 @@ export type DecisionGate =
   | 'NO_ENTRY'
   | 'RISK'
   | 'COST'
+  // The stop is too tight to survive its own round-trip cost: every exit,
+  // winning or losing, gives back more than the stop distance. Distinct from
+  // 'COST' (which compares REWARD to cost) because netRewardRisk divides BY the
+  // risk, so a shrinking stop makes that score better rather than worse — the
+  // one failure mode the reward-side gate is structurally blind to.
+  | 'RISK_VS_COST'
   // The cost analysis and the risk plan disagree about entry / SL / TP1 beyond
   // 1e-8 — a "shadow levels" bug. No SIGNAL is emitted; both level sets are
   // logged. This must never fire in normal operation (the cost gate is fed the
@@ -91,6 +97,14 @@ export interface IntradayParams {
   /** Base slippage assumption in percent, before spread/volatility adjustment */
   baseSlippagePercent: number;
   minRewardRisk: number;
+  /** The stop distance must be at least this multiple of the modelled
+   *  round-trip cost, or the trade is rejected (DecisionGate 'RISK_VS_COST').
+   *  minRewardRisk guards the REWARD side; this guards the RISK side, which
+   *  netRewardRisk cannot because it divides by the risk. A MEAN_REVERSION
+   *  stop that floors at minStopPercent (0.12%) against a ~0.4% round trip is
+   *  the case this catches. SUGGESTED STARTING VALUE — validate via
+   *  scripts/abBacktest.ts before relying on it. */
+  minStopCostMultiple: number;
 
   // ── Risk (§30-§35) ────────────────────────────────────────────────────────
   /** Deprecated: position sizing now uses positionTargetPct (10% of equity).
@@ -154,13 +168,6 @@ export interface IntradayParams {
    *  bot leaves this unset and keeps equity-based sizing — see resolveSizingBase
    *  for why the simulations needed the change. */
   useFixedSizingBase?: boolean;
-  /** When true, a MEAN_REVERSION position's stop-loss only triggers once a
-   *  CLOSED 5M candle is beyond the level (not a live-price touch) — filters
-   *  out a wick that reverses within the same candle. Only implementable in
-   *  the simulation engines: the real bot's SL is a native Bybit bracket
-   *  order, touch-triggered by the exchange itself, with no "confirm on
-   *  close" order type. */
-  meanReversionCloseConfirmStop?: boolean;
 
   // ── Duration / time stops (§28/§29) ───────────────────────────────────────
   maxHoldMinutes: Record<Exclude<SetupType, 'NONE'>, number>;
@@ -334,6 +341,7 @@ export const DEFAULT_INTRADAY_PARAMS: IntradayParams = {
   minQuoteVolume24h: 1_000_000,
   baseSlippagePercent: 0.02,
   minRewardRisk: 1.2,
+  minStopCostMultiple: 2.0,
 
   riskPerTradePercent: 0.5,
   maxRiskPerTradePercent: 0.75,

@@ -41,7 +41,7 @@ export interface CostAnalysis {
   grossRewardRisk: number;
   approved: boolean;
   reason: string;
-  blockGate: 'COST' | 'SPREAD' | null;
+  blockGate: 'COST' | 'SPREAD' | 'RISK_VS_COST' | null;
 }
 
 export interface CostInput {
@@ -136,6 +136,32 @@ export function evaluateCostEdge(input: CostInput): CostAnalysis {
       approved: false,
       reason: `Spread ${spreadPercent.toFixed(3)}% גדול מ-${(params.maxSpreadShareOfMove * 100).toFixed(0)}% מהמהלך הצפוי (${expectedMovePercent.toFixed(3)}%) — NO TRADE`,
       blockGate: 'SPREAD'
+    };
+  }
+
+  // Risk-vs-cost gate (§25b). netRewardRisk divides by riskPercent, so a
+  // shrinking stop makes it LARGER — the reward-side gates below cannot see a
+  // stop that is too tight to survive its own round trip. A 0.12% stop against
+  // a ~0.4% round trip means every exit, winning or losing, gives back more
+  // than the stop distance. Reject it by name rather than approve a trade whose
+  // stop is decorative.
+  if (riskPercent > 0 && riskPercent < params.minStopCostMultiple * totalCostPercent) {
+    return {
+      ...levels,
+      entryFeePercent,
+      exitFeePercent,
+      spreadPercent,
+      slippagePercent,
+      totalCostPercent,
+      rewardPercent: Number(expectedMovePercent.toFixed(4)),
+      expectedMovePercent: Number(expectedMovePercent.toFixed(4)),
+      riskPercent: Number(riskPercent.toFixed(4)),
+      edgeRatio: Number(edgeRatio.toFixed(2)),
+      netRewardRisk: Number(netRewardRisk.toFixed(2)),
+      grossRewardRisk: Number(grossRewardRisk.toFixed(2)),
+      approved: false,
+      reason: `סטופ ${riskPercent.toFixed(3)}% < ${params.minStopCostMultiple}× עלות סבב ${totalCostPercent.toFixed(3)}% — כל יציאה מחזירה יותר מהסטופ, NO TRADE`,
+      blockGate: 'RISK_VS_COST'
     };
   }
 
@@ -341,10 +367,6 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
     (atr5 * params.maxStopAtrMult) / entry * 100,
     params.maxStopPercent
   );
-  const minAtrStopPct = Math.min(
-    (atr5 * params.minStopAtrMult) / entry * 100,
-    params.minStopPercent
-  );
 
   // Structure-based stop distance (from stopReference with buffer)
   let structureStopPct: number | undefined;
@@ -361,6 +383,21 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   if (structureStopPct !== undefined && structureStopPct > 0) {
     slDistancePct = Math.min(slDistancePct, structureStopPct);
   }
+
+  // MEAN_REVERSION stop floor. Its stopReference is the swing over just the last
+  // 6 5M candles in a RANGING regime, so the structural branch above nearly
+  // always wins and floors at minStopPercent (0.12%) — tighter than the
+  // round-trip cost, which makes every exit a loss. These two knobs widen the
+  // MR stop specifically; both default to unset (no effect). Applied BEFORE the
+  // maxStopPercent clamp so a large ATR still cannot push the stop past 1.5%.
+  if (input.setupType === 'MEAN_REVERSION') {
+    const mrAtrFloorPct = typeof params.meanReversionMinStopAtrMult === 'number'
+      ? (atr5 * params.meanReversionMinStopAtrMult) / entry * 100
+      : 0;
+    const mrPctFloor = params.meanReversionMinStopPercent ?? 0;
+    slDistancePct = Math.max(slDistancePct, mrAtrFloorPct, mrPctFloor);
+  }
+
   // Clamp to [minStopPercent, maxStopPercent]
   slDistancePct = Math.max(params.minStopPercent, Math.min(params.maxStopPercent, slDistancePct));
   // Hard 4.2% cap — never exceed

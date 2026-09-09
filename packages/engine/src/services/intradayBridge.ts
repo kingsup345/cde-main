@@ -442,8 +442,7 @@ export function evaluatePositionExit(
   atr5: number,
   portfolio: ExitPortfolioInput,
   reversal?: { direction: Direction; setupScore: number; entryConfirmed: boolean },
-  params?: IntradayParams,
-  lastClosedCandleClose?: number
+  params?: IntradayParams
 ): IntradayExitDecision {
   const view = buildExitView(pos);
   const ctx: IntradayExitContext = {
@@ -456,8 +455,7 @@ export function evaluatePositionExit(
       weeklyDrawdownPercent: portfolio.weeklyDrawdownPercent,
       systemLocked: portfolio.systemLocked
     },
-    reversalSignal: reversal,
-    lastClosedCandleClose
+    reversalSignal: reversal
   };
   return evaluateIntradayExit(view, ctx);
 }

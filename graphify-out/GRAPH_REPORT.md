@@ -1,26 +1,26 @@
-# Graph Report - crypto-decision-engine-main  (2026-09-08)
+# Graph Report - crypto-decision-engine-main  (2026-09-09)
 
 ## Corpus Check
-- 218 files · ~226,992 words
+- 225 files · ~242,200 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2190 nodes · 5613 edges · 100 communities (84 shown, 11 thin omitted)
+- 2244 nodes · 5867 edges · 107 communities (92 shown, 10 thin omitted)
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS · INFERRED: 23 edges (avg confidence: 0.83)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `2fd54783`
+- Built from commit: `64522102`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - backtestSweep.ts
-- Portfolio.tsx
+- lucide-react
 - backtestRunner.ts
 - tradingApiClient.ts
 - tradingWorker.ts
-- PipelineStage
+- Portfolio.tsx
 - marketDataService.ts
 - marketDataService.test.ts
 - execution.ts
@@ -33,15 +33,15 @@
 - react
 - services/pathStudy.ts
 - compilerOptions
-- PortfolioRiskMeter.tsx
+- Gauge.tsx
 - simExecution.ts
 - manifest.json
-- useSimulationBot.ts
+- SimPosition
 - market-data.ts
 - compilerOptions
 - compilerOptions
 - DecisionContext
-- toBybitSymbol
+- toBaseAsset
 - 1. מנוע TrendBreakout המלא (`trendBreakout.ts` + `trendBreakoutExecution.ts`)
 - prev4hRangeExecution.ts
 - threeBotIntegration.test.ts
@@ -64,12 +64,12 @@
 - server/package.json
 - דוח אימות ממצאים + תוכנית תיקונים
 - DEPLOYMENT — הגדרת Render + Netlify + Firebase
-- intradayBridge.ts
+- analysis.ts
 - BacktestResults.tsx
 - errorHandlerSanitizer.test.ts
-- SimulationEngineColumn.tsx
+- PortfolioPulseCard.tsx
 - cn
-- vitest
+- intradaySetup.ts
 - proAlgEngine.ts
 - src/index.ts
 - symbolUniverse.ts
@@ -80,10 +80,10 @@
 - shutdown
 - proConfidenceProfile.ts
 - דוח אנליסט — סתירות ובאגים בדף "השוואת ביצועי הבוטים"
-- tradeEngine.ts
+- intradayIndicators.ts
 - ErrorBoundary
 - smoke-test.mjs
-- CryptoDetailModal.tsx
+- intradayEngine.ts
 - package.json
 - TradingApiClient
 - sonner.tsx
@@ -96,85 +96,92 @@
 - SCOPING — Limit/Market toggle + dynamic Risk Profile, for all 4 sim bots
 - CI Workflow (GitHub Actions)
 - render.yaml Render Web Service Config
-- analysis.ts
-- pathSimExecution.ts
-- badge.tsx
+- Candle
+- trendBreakoutExecution.ts
+- PortfolioBuilder.tsx
 - intradayAdapter.ts
 - PathSimulationBotContext.tsx
-- BybitSimulationBotContext.tsx
-- Candle
+- pathEngine.ts
+- vitest
 - emaSeedingImpact.ts
 - WorkerAuthContext.tsx
-- binanceUnlistedSymbols.test.ts
+- scripts/pathStudy.ts
+- useSimulationBot.ts
+- pathValidation.test.ts
+- LiveBoard.tsx
+- evaluatePathDecision
+- fillDueOrders
+- fundingOrthogonality.ts
+- createKVStore
 - eslint.config.js
 - service-worker.js
 - tailwindcss
 - vite.config.ts
 
 ## God Nodes (most connected - your core abstractions)
-1. `Candle` - 68 edges
+1. `Candle` - 70 edges
 2. `cn()` - 65 edges
-3. `react` - 60 edges
-4. `SimPosition` - 43 edges
-5. `SignalEvaluation` - 40 edges
-6. `PendingOrder` - 39 edges
-7. `lucide-react` - 38 edges
-8. `SimBotConfig` - 31 edges
-9. `SimTrade` - 30 edges
-10. `vitest` - 29 edges
+3. `react` - 61 edges
+4. `SimPosition` - 45 edges
+5. `SignalEvaluation` - 41 edges
+6. `PendingOrder` - 41 edges
+7. `lucide-react` - 39 edges
+8. `vitest` - 34 edges
+9. `SimBotConfig` - 31 edges
+10. `SimTrade` - 30 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Placeholder Image Icon SVG` --conceptually_related_to--> `Crypto Decision Engine SPA Entry (index.html)`  [INFERRED]
   public/placeholder.svg → index.html
 - `toInternalSymbol()` --calls--> `toBaseAsset()`  [EXTRACTED]
   src/services/bybitApi.ts → packages/engine/src/services/assetUniverse.ts
+- `tick()` --indirect_call--> `computeAtr5()`  [INFERRED]
+  server/simEngineFactory.ts → packages/engine/src/services/intradayBridge.ts
 - `ScanResult` --references--> `IntradayDecision`  [EXTRACTED]
   server/tradingWorker.ts → packages/engine/src/services/intradayEngine.ts
 - `BotInput` --references--> `SimPosition`  [EXTRACTED]
-  src/pages/BacktestResults.tsx → packages/engine/src/services/simExecution.ts
-- `TradeRow` --inherits--> `SimTrade`  [EXTRACTED]
   src/pages/BacktestResults.tsx → packages/engine/src/services/simExecution.ts
 
 ## Import Cycles
 - None detected.
 
-## Communities (100 total, 11 thin omitted)
+## Communities (107 total, 10 thin omitted)
 
 ### Community 0 - "backtestSweep.ts"
 Cohesion: 0.06
-Nodes (37): buildGrid(), Combo, ComboResult, CONC, DAYS, ENTRY_MIN, fetchHistory(), fetchKlinesPaged() (+29 more)
+Nodes (35): buildGrid(), Combo, ComboResult, CONC, DAYS, ENTRY_MIN, fetchHistory(), fetchKlinesPaged() (+27 more)
 
-### Community 1 - "Portfolio.tsx"
-Cohesion: 0.11
-Nodes (35): PortfolioAnalysis, lucide-react, recharts, AIChatbot(), AIChatbotProps, Message, CryptoCard(), safeNumber() (+27 more)
+### Community 1 - "lucide-react"
+Cohesion: 0.16
+Nodes (27): CryptoRecommendation, PortfolioAnalysis, lucide-react, AIChatbotProps, Message, CryptoCard(), CryptoCardProps, safeNumber() (+19 more)
 
 ### Community 2 - "backtestRunner.ts"
-Cohesion: 0.06
-Nodes (48): calculateTradingFee(), TradeSide, arg(), argNum(), Candle, cmdRun(), cmdSnapshot(), cmdSnapshotMtf() (+40 more)
+Cohesion: 0.07
+Nodes (47): calculateTradingFee(), TradeSide, arg(), argNum(), Candle, cmdRun(), cmdSnapshot(), cmdSnapshotMtf() (+39 more)
 
 ### Community 3 - "tradingApiClient.ts"
-Cohesion: 0.13
-Nodes (22): DEFAULT_CONFIG, SimulationBotContext, SimulationBotProvider(), useFearGreedIndex(), useServerSimDefaults(), ArchivedRun, BacktestArchiveResponse, clearBacktestArchive() (+14 more)
+Cohesion: 0.09
+Nodes (36): SimBotConfig, BybitSimulationBotContext, BybitSimulationBotProvider(), DEFAULT_BYBIT_CONFIG, EMPTY_SNAPSHOT, DEFAULT_CONFIG, SimulationBotContext, SimulationBotProvider() (+28 more)
 
 ### Community 4 - "tradingWorker.ts"
 Cohesion: 0.03
-Nodes (56): BybitSimSnapshot, PathSimSnapshot, ProSimSnapshot, allowedOrigins, archiveStore, botSymbolsRaw, bybitSimEngine, bybitSimState (+48 more)
+Nodes (58): BybitSimSnapshot, PathSimSnapshot, ProSimSnapshot, allowedOrigins, archiveStore, BoardSource, botSymbolsRaw, bybitMinConfidenceEnv (+50 more)
 
-### Community 5 - "PipelineStage"
-Cohesion: 0.24
-Nodes (6): CircuitBreakerStage, ExposureStage, RunEngineStage, ValidateInputStage, PipelineStage, StageResult
+### Community 5 - "Portfolio.tsx"
+Cohesion: 0.09
+Nodes (29): AIChatbot(), FloatingActionMenu(), FloatingActionMenuProps, Navigation(), Particle, ParticleBackground(), PersonalizedDashboard(), EmptyPortfolio() (+21 more)
 
 ### Community 6 - "marketDataService.ts"
-Cohesion: 0.10
-Nodes (26): binanceListsSymbol(), BybitKlineResponse, BybitTickerRow, CandleSource, CandleValidationResult, clearFundingCache(), fetchBinanceKlines(), fetchBinanceSymbols() (+18 more)
+Cohesion: 0.09
+Nodes (36): toBybitSymbol(), binanceListsSymbol(), BybitKlineResponse, BybitTickerRow, cacheKey(), CandleSource, CandleValidationResult, clearFundingCache() (+28 more)
 
 ### Community 7 - "marketDataService.test.ts"
-Cohesion: 0.18
-Nodes (9): clearMarketDataCache(), dropFormingCandle(), fetchBacktestHistory(), fetchTimeframe(), isAlignedToTimeframe(), TIMEFRAME_SPECS, validateCandles(), buildBybitRows() (+1 more)
+Cohesion: 0.13
+Nodes (10): clearMarketDataCache(), dropFormingCandle(), fetchBacktestHistory(), fetchTimeframe(), isAlignedToTimeframe(), TIMEFRAME_SPECS, validateCandles(), REGISTRY (+2 more)
 
 ### Community 8 - "execution.ts"
 Cohesion: 0.09
-Nodes (39): AdaptiveRiskInput, adaptiveRiskPercentFromHistory(), computeAdaptiveRiskPercent(), computeDrawdownFactor(), computeSizingMultiplier(), computeStreakFactor(), computeSymbolStreakCooldownUntil(), computeWinRateFactor() (+31 more)
+Nodes (40): AdaptiveRiskInput, adaptiveRiskPercentFromHistory(), computeAdaptiveRiskPercent(), computeDrawdownFactor(), computeSizingMultiplier(), computeStreakFactor(), computeSymbolStreakCooldownUntil(), computeWinRateFactor() (+32 more)
 
 ### Community 9 - "Crypto Decision Engine SPA Entry (index.html)"
 Cohesion: 0.67
@@ -197,36 +204,36 @@ Cohesion: 0.06
 Nodes (34): §10 — signalPrice מול actualFillPrice, §11 — Position Target מול Actual Fill, §12 — Parameter Source of Truth, §13 — Closed Candle Consistency, §14 — Prev4hRange Candle Closure, §15 — Backtest מול Sim/Live Economics, §16 — Pro Bot HOLD מול ALREADY_HELD, §17 — Pro Bot Confidence Reproducibility (+26 more)
 
 ### Community 14 - "App.tsx"
-Cohesion: 0.07
-Nodes (37): CryptoRecommendation, react-router-dom, @tanstack/react-query, queryClient, CryptoCardProps, MarketOverview(), MarketOverviewProps, MatrixBackground() (+29 more)
+Cohesion: 0.10
+Nodes (27): react-router-dom, @tanstack/react-query, queryClient, FearGreedIndicator(), MarketOverview(), SmartTipsPanel(), fromBybitSymbol(), useCryptoData() (+19 more)
 
 ### Community 15 - "react"
-Cohesion: 0.23
-Nodes (7): react, AlertsPanel(), AlertsPanelProps, Particle, ParticleBackground(), Alert, useAlerts()
+Cohesion: 0.13
+Nodes (13): react, AlertsPanel(), AlertsPanelProps, MatrixBackground(), MatrixBackgroundProps, ScrollArea, ScrollBar, Switch (+5 more)
 
 ### Community 16 - "services/pathStudy.ts"
-Cohesion: 0.05
-Nodes (79): buildFearGreedSeries(), fearGreedAt(), FearGreedPoint, FearGreedSeries, fetchFearGreedHistory(), parseFearGreedPayload(), utcDayStart(), aggregateToH4() (+71 more)
+Cohesion: 0.11
+Nodes (24): bucketKey(), buildPathTable(), BuildTableOptions, buildValidatedPathTable(), costInR(), DEFAULT_COST_R, EXIT_SLIPPAGE_PCT, measureBarPaths() (+16 more)
 
 ### Community 17 - "compilerOptions"
 Cohesion: 0.10
 Nodes (19): compilerOptions, allowImportingTsExtensions, isolatedModules, jsx, lib, module, moduleDetection, moduleResolution (+11 more)
 
-### Community 18 - "PortfolioRiskMeter.tsx"
-Cohesion: 0.22
-Nodes (13): FearGreedIndex, FEAR_GREED_ZONES, FearGreedIndicator(), FearGreedIndicatorProps, angleFor(), arcPath(), clamp(), Gauge() (+5 more)
+### Community 18 - "Gauge.tsx"
+Cohesion: 0.57
+Nodes (6): angleFor(), arcPath(), clamp(), Gauge(), GaugeProps, polarToXY()
 
 ### Community 19 - "simExecution.ts"
-Cohesion: 0.08
-Nodes (23): DEFAULT_POSITION_PERCENT, ENTRY_COOLDOWN_MS, ENTRY_ORDER_SIDES, EntryBudgetInput, EXIT_ORDER_SIDES, FillableOrdersResult, FillEvent, FillResult (+15 more)
+Cohesion: 0.11
+Nodes (27): isInStreakCooldown(), streakCooldownFromHistory(), evaluateCorrelationGate(), toPositionDirection(), generatePathOrders(), PATH_ENTRY_ORDER_SIDES, pathEntryBudget(), uid() (+19 more)
 
 ### Community 20 - "manifest.json"
 Cohesion: 0.11
 Nodes (17): background_color, categories, description, dir, display, features, icons, lang (+9 more)
 
-### Community 21 - "useSimulationBot.ts"
-Cohesion: 0.06
-Nodes (87): toBaseAsset(), FundingSnapshot, buildFactorsFromDecisionResult(), computeAtr5(), DecisionFactor, resolveTradeSide(), SignalEvaluation, MultiTimeframeSnapshot (+79 more)
+### Community 21 - "SimPosition"
+Cohesion: 0.15
+Nodes (32): FundingSnapshot, SignalEvaluation, MultiTimeframeSnapshot, PathOrderGenContext, Prev4hRangeOrderGenContext, ProRiskLevel, ProSignalResult, ProGateContext (+24 more)
 
 ### Community 22 - "market-data.ts"
 Cohesion: 0.23
@@ -241,24 +248,24 @@ Cohesion: 0.12
 Nodes (16): compilerOptions, allowImportingTsExtensions, isolatedModules, lib, module, moduleDetection, moduleResolution, noEmit (+8 more)
 
 ### Community 25 - "DecisionContext"
-Cohesion: 0.20
-Nodes (7): IntradayAdapter, PathAdapter, DecisionEngine, DecisionContext, DecisionResult, EngineAdapter, EngineId
+Cohesion: 0.19
+Nodes (6): IntradayAdapter, PathAdapter, DecisionEngine, DecisionContext, EngineAdapter, EngineId
 
-### Community 26 - "toBybitSymbol"
-Cohesion: 0.22
-Nodes (13): toBybitSymbol(), evaluateUniverse(), cacheKey(), exportMarketDataCache(), fetchLiquiditySnapshots(), getLiquiditySnapshots(), getMultiTimeframeData(), getUniverseMarketData() (+5 more)
+### Community 26 - "toBaseAsset"
+Cohesion: 0.19
+Nodes (22): toBaseAsset(), createBybitSimEngine(), createPathSimEngine(), createProSimEngine(), createSimEngine(), createGenericSimEngine(), buildH1CandlesForSymbol(), buildM5CandlesForSymbol() (+14 more)
 
 ### Community 27 - "1. מנוע TrendBreakout המלא (`trendBreakout.ts` + `trendBreakoutExecution.ts`)"
 Cohesion: 0.07
 Nodes (29): 1.1 פרמטרים (spec §23), 1.2 זרימה (state machine — spec §6), 1.3 אינדיקטורים (סעיף 2 — closed candles only), 1.4 חישוב Score (סעיף 7), 1.5 Entry / SL / TP (סעיפים 9/10), 1.6 Stop management (סעיף 12), 1.7 Exits (סעיף 13), 1. מנוע TrendBreakout המלא (`trendBreakout.ts` + `trendBreakoutExecution.ts`) (+21 more)
 
 ### Community 28 - "prev4hRangeExecution.ts"
-Cohesion: 0.10
-Nodes (18): DAILY_DRAWDOWN_BLOCK_PERCENT, PER_ASSET_EXPOSURE_CAP_PERCENT, WEEKLY_DRAWDOWN_LOCK_PERCENT, DEFAULT_PREV4H_RANGE_PARAMS, PREV4H_MIN_H1_CANDLES, Prev4hRangeParams, Prev4hRangePlan, readPrev4hRangePlan() (+10 more)
+Cohesion: 0.13
+Nodes (30): cappedTakeProfitLevels(), capStopLoss(), ExitLevel, isLongSide(), MAX_LOSS_PERCENT, maxLossStopLevel(), positionPnlPercent(), reachedStop() (+22 more)
 
 ### Community 29 - "threeBotIntegration.test.ts"
-Cohesion: 0.17
-Nodes (17): BYBIT_SIM_BOT_LAST_KNOWN_RUNNING_KEY, PATH_SIM_BOT_LAST_KNOWN_RUNNING_KEY, PRO_SIM_BOT_STORAGE_KEY, SIM_BOT_STORAGE_KEY, AggregatableContext, AggregatedBot, CombinedRisk, combineRisk() (+9 more)
+Cohesion: 0.15
+Nodes (19): PathRegime, slotIndexAt(), BYBIT_SIM_BOT_LAST_KNOWN_RUNNING_KEY, PATH_SIM_BOT_LAST_KNOWN_RUNNING_KEY, PRO_SIM_BOT_STORAGE_KEY, SIM_BOT_STORAGE_KEY, AggregatableContext, AggregatedBot (+11 more)
 
 ### Community 30 - "components.json"
 Cohesion: 0.12
@@ -269,12 +276,12 @@ Cohesion: 0.16
 Nodes (16): BINANCE_INTERVAL, BybitKlineResponse, CONC, fetchBinance(), fetchBybit(), fetchJson(), fetchKlines(), FM_LIMIT (+8 more)
 
 ### Community 32 - "correlation.ts"
-Cohesion: 0.16
-Nodes (15): alignCloses(), clampNum(), CorrelatedHolding, CORRELATION_LOOKBACK_FLOOR, correlationBetween(), CorrelationGateInput, CorrelationMatch, DEFAULT_CORRELATION_LOOKBACK (+7 more)
+Cohesion: 0.13
+Nodes (18): alignCloses(), clampNum(), CorrelatedHolding, CORRELATION_LOOKBACK_FLOOR, correlationBetween(), CorrelationGateInput, CorrelationGateResult, CorrelationMatch (+10 more)
 
 ### Community 33 - "simDefaults.ts"
-Cohesion: 0.15
-Nodes (18): MAX_TOTAL_EXPOSURE_PERCENT, POSITION_TARGET_PCT, MIN_PATH_CANDLES, PATH_MIN_H4_BARS, ConfidenceScale, riskLevelToMaxPositions(), SIM_BASE_DEFAULTS, SIM_BOT_IDS (+10 more)
+Cohesion: 0.16
+Nodes (17): MAX_TOTAL_EXPOSURE_PERCENT, POSITION_TARGET_PCT, PATH_MIN_H4_BARS, ConfidenceScale, riskLevelToMaxPositions(), SIM_BASE_DEFAULTS, SIM_BOT_IDS, SIM_BOT_SPECS (+9 more)
 
 ### Community 34 - "compilerOptions"
 Cohesion: 0.12
@@ -289,8 +296,8 @@ Cohesion: 0.03
 Nodes (59): dependencies, @capacitor/android, @capacitor/cli, @capacitor/core, @capacitor/ios, class-variance-authority, clsx, cmdk (+51 more)
 
 ### Community 37 - "bybitApi.ts"
-Cohesion: 0.23
-Nodes (8): TARGET_SYMBOLS, BybitKlineData, BybitTicker, toInternalSymbol(), fetchFromWorker(), fetchLiveUniverse(), getActiveSymbols(), resolveWorkerBaseUrl()
+Cohesion: 0.25
+Nodes (7): TARGET_SYMBOLS, BybitKlineData, BybitTicker, toInternalSymbol(), fetchLiveUniverse(), getActiveSymbols(), resolveWorkerBaseUrl()
 
 ### Community 38 - "דוח אימות — האם ההחלטות בוצעו? (בדיקה אמפירית בקוד)"
 Cohesion: 0.09
@@ -301,8 +308,8 @@ Cohesion: 0.21
 Nodes (13): BUCKET_BOUNDS, BUCKET_LABELS, BucketStats, computeBuckets(), formatPercent(), getBucketIndex(), getTopReason(), main() (+5 more)
 
 ### Community 40 - "scan"
-Cohesion: 0.20
-Nodes (17): buildPortfolioRiskStats(), baseCoin(), bybitExec(), checkClosedFuturesPositions(), checkClosedSpotPositions(), confirmSpotEntries(), executeOrder(), fetchWithTimeout() (+9 more)
+Cohesion: 0.24
+Nodes (15): baseCoin(), bybitExec(), checkClosedFuturesPositions(), checkClosedSpotPositions(), confirmSpotEntries(), executeOrder(), fetchWithTimeout(), getAccountContext() (+7 more)
 
 ### Community 41 - "אלגוריתם ההחלטה של הבוטים (סימולציה ומסחר אמיתי)"
 Cohesion: 0.14
@@ -336,9 +343,9 @@ Nodes (19): 1. ⚠️ `calculateEMA` — באג seeding בליבה (לא רק By
 Cohesion: 0.11
 Nodes (17): 1.1 יצירת הפרויקט, 1.2 יצירת Service Account, 1.3 המרה לשורה אחת (חובה למשתנה סביבה), 1.4 שני המשתנים ל-Render, 1. Firebase — Firestore + Service Account, 2.1 הגדרות השירות, 2.2 משתני סביבה (Dashboard → Environment), 2.3 בדיקה אחרי deploy (+9 more)
 
-### Community 49 - "intradayBridge.ts"
-Cohesion: 0.08
-Nodes (58): BacktestMetrics, BacktestResult, BacktestTrade, computeMetrics(), OpenPosition, PendingOrder, runBacktest(), runRiskVariants() (+50 more)
+### Community 49 - "analysis.ts"
+Cohesion: 0.10
+Nodes (32): FUNDING_CROWDED_ANNUAL_PCT, FUNDING_EXTREME_ANNUAL_PCT, FUNDING_MAX_AGE_MS, FUNDING_MIN_SIZE_MULTIPLIER, FUNDING_PERIODS_PER_YEAR, FundingVerdict, BacktestHistory, BacktestMetrics (+24 more)
 
 ### Community 50 - "BacktestResults.tsx"
 Cohesion: 0.22
@@ -346,27 +353,27 @@ Nodes (16): useBybitSimulationBotContext(), usePathSimulationBotContext(), usePr
 
 ### Community 51 - "errorHandlerSanitizer.test.ts"
 Cohesion: 0.06
-Nodes (36): createDefaultPortfolio(), isPortfolioShaped(), normalizeItem(), usePortfolio(), Binance24hTicker, BinanceKline, binancePublicApi, AlternativeMeResponse (+28 more)
+Nodes (34): normalizeItem(), Binance24hTicker, BinanceKline, binancePublicApi, AlternativeMeResponse, fearGreedApi, fetchDirect(), fetchFromWorker() (+26 more)
 
-### Community 52 - "SimulationEngineColumn.tsx"
-Cohesion: 0.12
-Nodes (21): HistoryPoint, Metric, PortfolioPulseCard(), Props, RANGE_LABEL, RANGE_MS, TimeRange, toneClass() (+13 more)
+### Community 52 - "PortfolioPulseCard.tsx"
+Cohesion: 0.13
+Nodes (16): getAggregatedCandles(), recharts, LivePositionChart(), LivePositionChartProps, HistoryPoint, Metric, PortfolioPulseCard(), Props (+8 more)
 
 ### Community 53 - "cn"
-Cohesion: 0.10
-Nodes (28): @radix-ui/react-dropdown-menu, Alert, AlertDescription, AlertTitle, alertVariants, CardDescription, CardFooter, DropdownMenuCheckboxItem (+20 more)
+Cohesion: 0.08
+Nodes (41): class-variance-authority, @radix-ui/react-dropdown-menu, CryptoChart(), CryptoChartProps, CryptoDetailModal(), CryptoDetailModalProps, safeNumber(), safeNumber() (+33 more)
 
-### Community 54 - "vitest"
-Cohesion: 0.11
-Nodes (12): applyFundingAccrual(), SIM_INTRADAY_PARAMS_OVERRIDE, DEFAULT_TREND_BREAKOUT_PARAMS, TrendBreakoutPlan, vitest, baseCtx, SW_SOURCE, SETUPS (+4 more)
+### Community 54 - "intradaySetup.ts"
+Cohesion: 0.26
+Nodes (18): BollingerResult, CompressionResult, MacdResult, MarketStructureResult, ramp(), StochasticResult, VwapResult, detectSetup15M() (+10 more)
 
 ### Community 55 - "proAlgEngine.ts"
 Cohesion: 0.05
-Nodes (69): calculateOptimalEntryPrice(), computeProSignal(), PRO_ALLOCATION_DEFAULT_PERCENT, PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD, PRO_ALLOCATION_HIGH_PERCENT, PRO_CONFIDENCE_BY_RISK, PRO_COVERAGE_FULL_WEIGHT, PRO_DEFAULT_ENTRY_CONFIDENCE (+61 more)
+Nodes (74): calculateOptimalEntryPrice(), computeProSignal(), PRO_ALLOCATION_DEFAULT_PERCENT, PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD, PRO_ALLOCATION_HIGH_PERCENT, PRO_CONFIDENCE_BY_RISK, PRO_COVERAGE_FULL_WEIGHT, PRO_DEFAULT_ENTRY_CONFIDENCE (+66 more)
 
 ### Community 56 - "src/index.ts"
-Cohesion: 0.12
-Nodes (28): EvaluateUniverseOptions, ExitPortfolioInput, fetchSymbolSnapshot(), PortfolioInput, ActivePosition, BollingerBands, CryptoChartData, EnhancedCryptoData (+20 more)
+Cohesion: 0.08
+Nodes (47): buildExitView(), buildFactorsFromDecisionResult(), buildPortfolioRiskStats(), evaluatePositionExit(), evaluateSymbolFromSnapshot(), evaluateUniverse(), EvaluateUniverseOptions, ExitPortfolioInput (+39 more)
 
 ### Community 57 - "symbolUniverse.ts"
 Cohesion: 0.27
@@ -381,16 +388,16 @@ Cohesion: 0.22
 Nodes (8): exports, ./analysis, ./execution, ./market-data, name, private, type, version
 
 ### Community 60 - "ProSimulationBotContext.tsx"
-Cohesion: 0.19
-Nodes (14): ExecutiveDashboard(), DEFAULT_PRO_CONFIG, ProSimulationBotContext, ProSimulationBotProvider(), useProSimulationBotContextSafe(), useSimulationBotContextSafe(), useApiPolling(), UseApiPollingOptions (+6 more)
+Cohesion: 0.18
+Nodes (14): ExecutiveDashboard(), DEFAULT_PRO_CONFIG, ProSimulationBotContext, ProSimulationBotProvider(), useProSimulationBotContextSafe(), useSimulationBotContextSafe(), useApiPolling(), RealTradingBot() (+6 more)
 
 ### Community 61 - "useApiPollingCascade.test.ts"
 Cohesion: 0.25
 Nodes (4): createHarness(), depsEqual(), Harness, PollFn
 
 ### Community 62 - "shutdown"
-Cohesion: 0.40
-Nodes (5): persistBybitSim(), persistPathSim(), persistProSim(), persistSim(), shutdown()
+Cohesion: 0.25
+Nodes (8): exportMarketDataCache(), persistBybitSim(), persistMarketCache(), persistPathSim(), persistProSim(), persistSim(), serializeState(), shutdown()
 
 ### Community 63 - "proConfidenceProfile.ts"
 Cohesion: 0.52
@@ -400,13 +407,13 @@ Nodes (6): arg(), klines(), main(), q(), share(), topSymbols()
 Cohesion: 0.14
 Nodes (13): 🔴 F-1 — בסיס ההון מקודד קשיח ל-‎$10,000‎ (שורש ה-−90%), 🔴 F-2 — שורת ה-"סה"כ" סובלת מאותו באג, מוכפל פי 4, 🟠 F-3 — שני מדדי P&L שונים מוצגים זה לצד זה בלי הבחנה, 🟠 F-4 — `hasServerData` לא נבדק: בוט מנותק נספר כ-"שטוח, 0%", 🟡 F-5 — הדף מחשב מחדש Win Rate / מספר עסקאות במקום להשתמש בנתוני השרת, 🟡 F-6 — אין בדיקת-שפיות (reconciliation) על המסך, דוח אנליסט — סתירות ובאגים בדף "השוואת ביצועי הבוטים", הערכת אנליסט (+5 more)
 
-### Community 65 - "tradeEngine.ts"
-Cohesion: 0.13
-Nodes (49): confirmEntry5M(), emptyEntry(), atrRegime(), AtrRegimeResult, bollinger(), BollingerResult, candleQuality, clamp() (+41 more)
+### Community 65 - "intradayIndicators.ts"
+Cohesion: 0.21
+Nodes (26): confirmEntry5M(), emptyEntry(), atrRegime(), bollinger(), candleQuality, compression(), findSwings(), last() (+18 more)
 
-### Community 68 - "CryptoDetailModal.tsx"
-Cohesion: 0.27
-Nodes (10): CryptoChartProps, CryptoDetailModal(), CryptoDetailModalProps, safeNumber(), DialogContent, DialogDescription, DialogFooter(), DialogHeader() (+2 more)
+### Community 68 - "intradayEngine.ts"
+Cohesion: 0.20
+Nodes (18): DecisionOutcome, IntradayDecision, IntradayDecisionInput, Entry5M, IntradayExitContext, DecisionGate, Direction, EntryTrigger (+10 more)
 
 ### Community 69 - "package.json"
 Cohesion: 0.03
@@ -428,37 +435,41 @@ Nodes (6): applySimConfigPatch(), hydrateBybitSim(), hydratePathSim(), hydratePr
 Cohesion: 0.07
 Nodes (26): 10. Take Profit, 11. SCALE — Scale-in מדורג (לא פותחים הכול בבת אחת), 12. Stop Management, 13. Exit Conditions, 14. Risk Management, 15. Exposure Limits, 16. Drawdown Protection, 17. Simulation Execution (+18 more)
 
+### Community 78 - "allowScripts"
+Cohesion: 0.40
+Nodes (5): allowScripts, esbuild@0.21.5, esbuild@0.25.0, esbuild@0.28.2, @swc/core@1.16.1
+
 ### Community 79 - "SCOPING — Limit/Market toggle + dynamic Risk Profile, for all 4 sim bots"
 Cohesion: 0.17
 Nodes (11): 0. Worker URL — `cde-main.onrender.com` (תיקון קטן), 1. Limit / Market toggle — מצב נוכחי לכל בוט, 2. פרופיל סיכון (low / medium / high) — מצב נוכחי, 3. Intraday → מודל `equity × 10%` (מההודעה הקודמת), 4. סיכום קבצים + הכרעות פתוחות, SCOPING — Limit/Market toggle + dynamic Risk Profile, for all 4 sim bots, ✅ בוצע (2026-09-07), הכרעות שצריך ממך לפני ביצוע (+3 more)
 
-### Community 84 - "analysis.ts"
-Cohesion: 0.12
-Nodes (30): annualisedFundingPct(), evaluateFundingGate(), FUNDING_CROWDED_ANNUAL_PCT, FUNDING_EXTREME_ANNUAL_PCT, FUNDING_MAX_AGE_MS, FUNDING_MIN_SIZE_MULTIPLIER, FUNDING_PERIODS_PER_YEAR, FundingVerdict (+22 more)
+### Community 84 - "Candle"
+Cohesion: 0.09
+Nodes (29): Prev4hRangeInput, Prev4hRangeCandleSet, OrderGenContext, breakoutLimitPrice(), Candle, clamp01(), computeConfidence(), ConfidenceInput (+21 more)
 
-### Community 85 - "pathSimExecution.ts"
-Cohesion: 0.16
-Nodes (24): isInStreakCooldown(), streakCooldownFromHistory(), evaluateCorrelationGate(), toPositionDirection(), generatePathOrders(), PATH_ENTRY_ORDER_SIDES, pathEntryBudget(), uid() (+16 more)
+### Community 85 - "trendBreakoutExecution.ts"
+Cohesion: 0.09
+Nodes (30): DecisionFactor, CAPITAL_FLOOR_PCT, DAILY_DRAWDOWN_BLOCK_PERCENT, isBelowCapitalFloor(), PER_ASSET_EXPOSURE_CAP_PERCENT, resolveSizingBase(), WEEKLY_DRAWDOWN_LOCK_PERCENT, evaluateProExit() (+22 more)
 
-### Community 86 - "badge.tsx"
-Cohesion: 0.16
-Nodes (15): getAggregatedCandles(), PortfolioItem, class-variance-authority, AddCryptoForm(), AddCryptoFormProps, CurrentPortfolioItems(), CurrentPortfolioItemsProps, LivePositionChart() (+7 more)
+### Community 86 - "PortfolioBuilder.tsx"
+Cohesion: 0.23
+Nodes (10): PortfolioItem, AddCryptoForm(), AddCryptoFormProps, CurrentPortfolioItems(), CurrentPortfolioItemsProps, PortfolioSummary(), PortfolioSummaryProps, PortfolioBuilder() (+2 more)
 
 ### Community 87 - "intradayAdapter.ts"
-Cohesion: 0.16
-Nodes (20): ClosedTradeRecord, CorrelationGateResult, intradayResultCache, mapDirection(), mapOutcome(), mapRiskPlan(), mapTradeType(), PathEngineParams (+12 more)
+Cohesion: 0.14
+Nodes (23): ClosedTradeRecord, CircuitBreakerStage, ExposureStage, intradayResultCache, mapDirection(), mapOutcome(), mapRiskPlan(), mapTradeType() (+15 more)
 
 ### Community 88 - "PathSimulationBotContext.tsx"
-Cohesion: 0.24
-Nodes (10): DEFAULT_PATH_CONFIG, EMPTY_SNAPSHOT, PathSimulationBotContext, PathSimulationBotProvider(), getPathSimState(), PathSimBotStateResponse, resetPathSim(), setPathSimConfig() (+2 more)
+Cohesion: 0.27
+Nodes (9): DEFAULT_PATH_CONFIG, EMPTY_SNAPSHOT, PathSimulationBotContext, PathSimulationBotProvider(), getPathSimState(), resetPathSim(), setPathSimConfig(), startPathSim() (+1 more)
 
-### Community 89 - "BybitSimulationBotContext.tsx"
-Cohesion: 0.24
-Nodes (10): BybitSimulationBotContext, BybitSimulationBotProvider(), DEFAULT_BYBIT_CONFIG, EMPTY_SNAPSHOT, BybitSimBotStateResponse, getBybitSimState(), resetBybitSim(), setBybitSimConfig() (+2 more)
-
-### Community 90 - "Candle"
+### Community 89 - "pathEngine.ts"
 Cohesion: 0.16
-Nodes (15): BacktestHistory, Candle, fetchFundingHistory(), FundingPoint, main(), OUT_DIR, pearson(), Snapshot (+7 more)
+Nodes (15): MIN_PATH_CANDLES, PATH_MAX_HOLD_MS, PATH_TIME_STOP_MS, PathDecision, PathDecisionInput, PathGate, pathKellyFraction(), BAR_MS (+7 more)
+
+### Community 90 - "vitest"
+Cohesion: 0.11
+Nodes (25): weightedAverageExit(), emptyDecision(), evaluateIntradayDecision(), finalize(), isFullParams(), clamp(), DEFAULT_INTRADAY_PARAMS, withParams() (+17 more)
 
 ### Community 91 - "emaSeedingImpact.ts"
 Cohesion: 0.33
@@ -467,6 +478,34 @@ Nodes (10): Candle, clamp01(), emaShipped(), emaTextbook(), fetchKlines(), last(
 ### Community 92 - "WorkerAuthContext.tsx"
 Cohesion: 0.48
 Nodes (5): WorkerAuthContext, WorkerAuthContextValue, WorkerAuthProvider(), resolveWorkerBaseUrlWithSource(), UrlSource
+
+### Community 93 - "scripts/pathStudy.ts"
+Cohesion: 0.18
+Nodes (16): buildWalkForwardWindows(), CandleOrdering, DEFAULT_TP_R, DEFAULT_USE_FEAR_GREED, RiskBasis, ValidatedBucket, arg(), cmdBuild() (+8 more)
+
+### Community 94 - "useSimulationBot.ts"
+Cohesion: 0.23
+Nodes (13): computeAtr5(), MIN_PRO_CANDLES, SIM_MIN_CONFIDENCE, selectFillableOrders(), CryptoData, PortfolioBuilderProps, useBackgroundWorker(), UseBackgroundWorkerOptions (+5 more)
+
+### Community 95 - "pathValidation.test.ts"
+Cohesion: 0.20
+Nodes (12): buildFearGreedSeries(), fearGreedAt(), FearGreedPoint, FearGreedSeries, fetchFearGreedHistory(), parseFearGreedPayload(), utcDayStart(), fearGreedBucket (+4 more)
+
+### Community 96 - "LiveBoard.tsx"
+Cohesion: 0.24
+Nodes (13): ACCENT, accentOf(), BotCard(), clock(), LiveBoard(), pct(), price(), SIDE_LABEL (+5 more)
+
+### Community 97 - "evaluatePathDecision"
+Cohesion: 0.23
+Nodes (12): aggregateToH4(), evaluatePathDecision(), noSignal(), pathRiskUnit(), barOpenFor(), labelBarState(), lookbackForBasis(), prior15mFor() (+4 more)
+
+### Community 98 - "fillDueOrders"
+Cohesion: 0.22
+Nodes (7): fillDueOrders(), MIN_SIM_ENTRY_USD, uid(), simulateSlippage(), candles, r, fill()
+
+### Community 99 - "fundingOrthogonality.ts"
+Cohesion: 0.36
+Nodes (8): annualisedFundingPct(), evaluateFundingGate(), fetchFundingHistory(), FundingPoint, main(), OUT_DIR, pearson(), Snapshot
 
 ### Community 141 - "eslint.config.js"
 Cohesion: 0.33
@@ -481,24 +520,24 @@ Nodes (3): lovable-tagger, vite, @vitejs/plugin-react-swc
   .github/workflows/ci.yml · relation: references
 
 ## Knowledge Gaps
-- **722 isolated node(s):** `config`, `$schema`, `style`, `rsc`, `tsx` (+717 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 851 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **11 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **733 isolated node(s):** `config`, `$schema`, `style`, `rsc`, `tsx` (+728 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 865 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **10 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **What is the exact relationship between `CI Workflow (GitHub Actions)` and `CI Workflow (GitHub Actions)`?**
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
-- **Why does `vitest` connect `vitest` to `correlation.ts`, `simDefaults.ts`, `backtestRunner.ts`, `package.json`, `marketDataService.test.ts`, `execution.ts`, `services/pathStudy.ts`, `intradayBridge.ts`, `threeBotIntegration.test.ts`, `errorHandlerSanitizer.test.ts`, `simExecution.ts`, `useSimulationBot.ts`, `useApiPollingCascade.test.ts`, `proAlgEngine.ts`, `Candle`, `prev4hRangeExecution.ts`, `binanceUnlistedSymbols.test.ts`?**
-  _High betweenness centrality (0.070) - this node is a cross-community bridge._
-- **Why does `react` connect `react` to `Portfolio.tsx`, `tradingApiClient.ts`, `CryptoDetailModal.tsx`, `package.json`, `hooks/use-toast.ts`, `App.tsx`, `WorkerAuthContext.tsx`, `PortfolioRiskMeter.tsx`, `errorHandlerSanitizer.test.ts`, `SimulationEngineColumn.tsx`, `cn`, `badge.tsx`, `useSimulationBot.ts`, `PathSimulationBotContext.tsx`, `BybitSimulationBotContext.tsx`, `BacktestResults.tsx`, `ProSimulationBotContext.tsx`?**
-  _High betweenness centrality (0.057) - this node is a cross-community bridge._
+- **Why does `react` connect `react` to `LiveBoard.tsx`, `lucide-react`, `tradingApiClient.ts`, `Portfolio.tsx`, `package.json`, `hooks/use-toast.ts`, `App.tsx`, `WorkerAuthContext.tsx`, `Gauge.tsx`, `errorHandlerSanitizer.test.ts`, `PortfolioPulseCard.tsx`, `cn`, `PortfolioBuilder.tsx`, `BacktestResults.tsx`, `PathSimulationBotContext.tsx`, `ProSimulationBotContext.tsx`, `useSimulationBot.ts`?**
+  _High betweenness centrality (0.073) - this node is a cross-community bridge._
+- **Why does `vitest` connect `vitest` to `backtestRunner.ts`, `marketDataService.test.ts`, `execution.ts`, `simExecution.ts`, `SimPosition`, `prev4hRangeExecution.ts`, `threeBotIntegration.test.ts`, `correlation.ts`, `simDefaults.ts`, `analysis.ts`, `errorHandlerSanitizer.test.ts`, `proAlgEngine.ts`, `src/index.ts`, `ProSimulationBotContext.tsx`, `useApiPollingCascade.test.ts`, `package.json`, `Candle`, `trendBreakoutExecution.ts`, `pathEngine.ts`, `pathValidation.test.ts`, `fillDueOrders`?**
+  _High betweenness centrality (0.072) - this node is a cross-community bridge._
 - **Why does `dependencies` connect `dependencies` to `package.json`?**
-  _High betweenness centrality (0.050) - this node is a cross-community bridge._
+  _High betweenness centrality (0.052) - this node is a cross-community bridge._
 - **What connects `config`, `$schema`, `style` to the rest of the system?**
-  _722 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _733 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `backtestSweep.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.05786090005844535 - nodes in this community are weakly interconnected._
-- **Should `Portfolio.tsx` be split into smaller, more focused modules?**
-  _Cohesion score 0.11137254901960784 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06015037593984962 - nodes in this community are weakly interconnected._
+- **Should `backtestRunner.ts` be split into smaller, more focused modules?**
+  _Cohesion score 0.0660377358490566 - nodes in this community are weakly interconnected._

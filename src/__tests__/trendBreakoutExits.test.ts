@@ -162,29 +162,31 @@ describe('slAtrMultiplier 1.5 → 2.8 — the stop stretches toward the cap', ()
   });
 });
 
-describe('stop exits confirm on the M15 close — no mid-candle exit (LONG)', () => {
-  it('a live wick through the stop with the M15 bar closing above it does NOT close the trade', () => {
-    // live 96.5 is below the 97.2 stop but above the 95.8 emergency cap, and
-    // the last CLOSED M15 candle closed at 100 — the stop must hold.
+describe('stop exits trigger immediately on touch — no M15 close confirmation', () => {
+  it('a live wick through the stop DOES close the trade immediately (LONG)', () => {
+    // live 96.5 is below the 97.2 stop but above the 95.8 emergency cap.
+    // With immediate SL execution, the trade closes on touch, not on M15 close.
     const orders = generateTrendBreakoutOrders(ctx({ price: 96.5 }));
-    expect(orders).toHaveLength(0);
+    expect(orders).toHaveLength(1);
+    expect(orders[0].side).toBe('close_long');
+    expect(orders[0].reason).toContain('Stop Loss');
   });
 
-  it('the M15 CLOSE beyond the stop closes the trade', () => {
+  it('the stop closes the trade on touch, no M15 close needed', () => {
     const m15 = withLastM15(m15Flat(), { open: 100, high: 100.2, low: 96.6, close: 96.8 });
     const orders = generateTrendBreakoutOrders(ctx({ price: 96.7, m15 }));
     expect(orders).toHaveLength(1);
     expect(orders[0].side).toBe('close_long');
-    expect(orders[0].positionId).toBe('lot1');
     expect(orders[0].reason).toContain('Stop Loss ב-');
     expect(orders[0].reason).toContain('סטופ ATR');
-    expect(orders[0].reason).toContain('סגירת נר M15');
+    // No M15 close confirmation anymore.
+    expect(orders[0].reason).not.toContain('סגירת נר M15');
     // A normal ATR stop must NOT be labelled as the cap.
     expect(orders[0].reason).not.toContain('תקרה');
   });
 
   it('the 4.2% cap still exits INTRABAR — the emergency brake', () => {
-    // live 95.0 is beyond the 95.8 cap level while the M15 close (100) is fine.
+    // live 95.0 is beyond the 95.8 cap level.
     const orders = generateTrendBreakoutOrders(ctx({ price: 95.0 }));
     expect(orders).toHaveLength(1);
     expect(orders[0].side).toBe('close_long');
@@ -193,26 +195,23 @@ describe('stop exits confirm on the M15 close — no mid-candle exit (LONG)', ()
 
   it('when the cap is what binds the stop, the reason says תקרה', () => {
     // ATR(M15) = 1.8 → 2.8 × 1.8 = 5.04 > 4.2% → capStopLoss pins the stop to
-    // 95.8. The M15 closed just below it (95.7) while live bounced to 95.85.
-    const m15 = withLastM15(m15Flat(1.8), { open: 100, high: 96.6, low: 95.6, close: 95.7 });
+    // 95.8. Live price at 95.7 is below the cap → immediate exit.
     const capped = lot({ stopLoss: maxLossStopLevel(100, true) });
-    const orders = generateTrendBreakoutOrders(ctx({ positions: [capped], price: 95.85, m15 }));
+    const orders = generateTrendBreakoutOrders(ctx({ positions: [capped], price: 95.7, m15: withLastM15(m15Flat(1.8), { open: 100, high: 96.6, low: 95.6, close: 95.7 }) }));
     expect(orders).toHaveLength(1);
-    expect(orders[0].reason).toContain('תקרה 4.2%');
+    expect(orders[0].reason).toContain('תקרת הפסד');
+    expect(orders[0].reason).toContain('4.2%');
   });
 
-  it('break-even/trailing stops also wait for the M15 close', () => {
+  it('break-even/trailing stops also trigger immediately on touch', () => {
     // highestPrice 104 = +1.43R → stop moved to entry (BE); trailing needs 1.5R.
     const up = [lot({ highestPrice: 104 })];
-    // Wick below entry with the M15 close at 100.2 → hold.
-    const holdM15 = withLastM15(m15Flat(), { open: 100, high: 100.6, low: 99.4, close: 100.2 });
-    expect(generateTrendBreakoutOrders(ctx({ positions: up, price: 99.5, m15: holdM15 }))).toHaveLength(0);
-    // M15 CLOSE below entry → exit as Trailing/BE.
-    const exitM15 = withLastM15(m15Flat(), { open: 100, high: 100.2, low: 99.3, close: 99.5 });
-    const orders = generateTrendBreakoutOrders(ctx({ positions: up, price: 99.4, m15: exitM15 }));
+    // Price below entry → exit as Trailing/BE immediately.
+    const orders = generateTrendBreakoutOrders(ctx({ positions: up, price: 99.5 }));
     expect(orders).toHaveLength(1);
     expect(orders[0].reason).toContain('Trailing/BE');
-    expect(orders[0].reason).toContain('סגירת נר M15');
+    // No M15 close confirmation anymore.
+    expect(orders[0].reason).not.toContain('סגירת נר M15');
   });
 });
 
@@ -229,17 +228,19 @@ describe('symmetry: the same rules on a SHORT', () => {
     takeProfit: 97
   });
 
-  it('a live wick above the stop with the M15 bar closing below it does NOT close the trade', () => {
+  it('a live wick above the stop DOES close the trade immediately (SHORT)', () => {
     const orders = generateTrendBreakoutOrders(ctx({ positions: [shortLot], price: 103.5, h1: [] }));
-    expect(orders).toHaveLength(0);
+    expect(orders).toHaveLength(1);
+    expect(orders[0].side).toBe('close_short');
+    expect(orders[0].reason).toContain('Stop Loss');
   });
 
-  it('the M15 CLOSE beyond the stop closes the trade', () => {
+  it('the stop closes the trade on touch, no M15 close needed', () => {
     const m15 = withLastM15(m15Flat(), { open: 100, high: 103.4, low: 99.8, close: 103.2 });
     const orders = generateTrendBreakoutOrders(ctx({ positions: [shortLot], price: 103.0, m15, h1: [] }));
     expect(orders).toHaveLength(1);
     expect(orders[0].side).toBe('close_short');
     expect(orders[0].reason).toContain('Stop Loss ב-');
-    expect(orders[0].reason).toContain('סגירת נר M15');
+    expect(orders[0].reason).not.toContain('סגירת נר M15');
   });
 });

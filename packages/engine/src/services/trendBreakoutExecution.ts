@@ -267,15 +267,10 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     const atrM15Now = currentAtrM15(set, p);
     const { stop, progressR } = effectiveStop(lt, live, atrM15Now, p);
 
-    // Stop exits are CLOSE-CONFIRMED on the last CLOSED M15 candle (operator
-    // decision 2026-09-08): a wick through the stop no longer closes the trade
-    // — the M15 close must sit beyond it. The forming bar is excluded upstream
-    // (trendBreakout.ts header), so this close is final. The one intrabar
-    // exception is the shared 4.2% hard cap below — the documented "never lose
-    // more than MAX_LOSS_PERCENT" emergency brake, which still fires on touch.
+    // Stop exits trigger immediately on touch/cross — no candle-close
+    // confirmation. The executed stop is the effective stop (4.2% cap applied).
+    // The shared cap below is the emergency brake that still fires on touch.
     // Defensive fallback: with no M15 series the stop reverts to touch behaviour.
-    const closedM15 = set?.m15?.[set.m15.length - 1];
-    const confirmClose = closedM15?.close ?? live;
     const capLevel = maxLossStopLevel(first.entryPrice, isLong);
 
     const pnlPct = positionPnlPercent(first.entryPrice, live, isLong);
@@ -311,14 +306,14 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     let reason = '';
     if (reachedStop(live, capLevel, isLong)) {
       reason = `חריגת תקרת הפסד ${MAX_LOSS_PERCENT}% בתוך נר — יציאת חירום (${pnlPct.toFixed(2)}%)`;
-    } else if (reachedStop(confirmClose, stop, isLong)) {
+    } else if (reachedStop(live, stop, isLong)) {
       // "תקרה" only when the cap is what actually binds the stop (capStopLoss
       // pulled the ATR stop in) — a normal ATR stop is labelled as such.
       const atCap = Math.abs(stop - capLevel) <= Math.abs(capLevel) * 1e-9 + 1e-12;
       const stopTag = atCap ? `תקרה ${MAX_LOSS_PERCENT}%` : 'סטופ ATR';
       reason = progressR >= p.breakEvenR
-        ? `Trailing/BE stop ב-${stop.toFixed(6)} (${progressR.toFixed(2)}R, סגירת נר M15)`
-        : `Stop Loss ב-${stop.toFixed(6)} (${pnlPct.toFixed(2)}%, ${stopTag}, סגירת נר M15)`;
+        ? `Trailing/BE stop ב-${stop.toFixed(6)} (${progressR.toFixed(2)}R)`
+        : `Stop Loss ב-${stop.toFixed(6)} (${pnlPct.toFixed(2)}%, ${stopTag})`;
     } else if (tp2Reached) {
       reason = `TP2 הושג ב-${(tp2 as number).toFixed(6)} (+${pnlPct.toFixed(2)}%)`;
     } else if (tp && !first.tp1Hit && reachedTarget(live, tp, isLong)) {
@@ -586,17 +581,27 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
 
     const desiredNotional = targetNotional * scaleFractions[0];
 
+    // entryRef is the signal-time price; the actual fill may differ (execution
+    // delay, limit vs market). Shift SL/TP by the same delta so the risk
+    // distance in price units is preserved regardless of where the order fills.
+    const entryDiff = price - plan.entryRef;
+    const sideIsLong = side === 'LONG';
+    const adjustedStopLoss = sideIsLong ? plan.stopLoss + entryDiff : plan.stopLoss + entryDiff;
+    const adjustedTakeProfit = sideIsLong ? plan.takeProfit + entryDiff : plan.takeProfit + entryDiff;
+    const adjustedTakeProfit1 = sideIsLong ? plan.takeProfit1 + entryDiff : plan.takeProfit1 + entryDiff;
+    const adjustedTakeProfit2 = sideIsLong ? plan.takeProfit2 + entryDiff : plan.takeProfit2 + entryDiff;
+
     const committed = placeLot({
       base: ev.symbol,
       side,
       desiredNotional,
       price,
-      stopLoss: plan.stopLoss,
-      takeProfit: plan.takeProfit,
-      takeProfit1: plan.takeProfit1,
-      takeProfit2: plan.takeProfit2,
+      stopLoss: adjustedStopLoss,
+      takeProfit: adjustedTakeProfit,
+      takeProfit1: adjustedTakeProfit1,
+      takeProfit2: adjustedTakeProfit2,
       confidence: ev.confidence,
-      reason: `כניסה ראשונית · SL ${plan.stopLoss.toFixed(6)} TP ${plan.takeProfit.toFixed(6)}`,
+      reason: `כניסה ראשונית · SL ${adjustedStopLoss.toFixed(6)} TP ${adjustedTakeProfit.toFixed(6)}`,
       scaleLabel: `scale 1/${scaleFractions.length}`,
       onBlocked: (code, message) => blockEntry(ev, code, message)
     });

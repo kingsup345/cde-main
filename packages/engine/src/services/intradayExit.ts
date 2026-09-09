@@ -64,11 +64,6 @@ export interface IntradayExitContext {
     setupScore: number;
     entryConfirmed: boolean;
   };
-  /** Close of the last fully-CLOSED 5M candle (not the live/forming price) —
-   *  only used for MEAN_REVERSION's stop-loss check when
-   *  params.meanReversionCloseConfirmStop is on. See that flag's doc comment
-   *  in intradayParams.ts. */
-  lastClosedCandleClose?: number;
 }
 
 export interface IntradayExitDecision {
@@ -93,8 +88,9 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
 
   // Hard 4.2% loss cap, enforced on every evaluation. A position opened before
   // the cap existed (or with a wider structural stop) has its effective stop
-  // pulled in here on the next tick — never loosened. FIXED_SL_PERCENT (1.8%)
-  // stops are already tighter, so this is a no-op for a normal intraday entry.
+  // pulled in here on the next tick — never loosened. buildRiskPlan already
+  // clamps the entry stop to maxStopPercent (1.5%), so this is normally a
+  // no-op — it is the backstop for a persisted position with a wider stop.
   const effectiveStopLoss = capStopLoss(pos.entryPrice, pos.stopLoss, isLong);
 
   const stopDistance = pos.plannedStopDistance && pos.plannedStopDistance > 0

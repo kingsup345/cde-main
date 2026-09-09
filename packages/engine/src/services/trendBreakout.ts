@@ -23,6 +23,7 @@ import {
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
 import { capStopLoss, stopWasCapped, takeProfitLevels, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
+import { FIXED_TP_PERCENT } from './intradayRisk';
 
 // ── Parameters (spec §23 — every knob configurable, no auto-optimisation) ────
 
@@ -351,13 +352,15 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
   const structuralStop = isLong ? entryRef - rUnit : entryRef + rUnit;
   const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
   const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
-  // TP is the shared FLAT ladder: TP1 at exactly TP1_PERCENT (3%), TP2 at
-  // TP2_PERCENT (4.5%) (operator rule 2026-09-08: "profit minimum 3%"). The
-  // bot's own 2R target is no longer the level — a tight-ATR symbol whose 2R
-  // sat below 3% would otherwise take TP1 below the floor. The trailing logic
-  // still measures progress in R off the (capped) stop, so the runner behaves
-  // the same once TP1 is banked.
-  const { takeProfit1, takeProfit2 } = takeProfitLevels(entryRef, isLong, TP1_PERCENT, TP2_PERCENT);
+  // TP is dynamic: TP1 >= 3% (minimum), TP2 scales from TP1 by 1.5x.
+  // The bot's own 2R target is overridden by the minimum 3% floor (operator
+  // rule 2026-09-08). The trailing logic still measures progress in R off the
+  // (capped) stop, so the runner behaves the same once TP1 is banked.
+  const minTp1Distance = entryRef * FIXED_TP_PERCENT / 100;
+  const atrTp1Distance = rUnit * p.tpRMultiplier;
+  const tp1Distance = Math.max(atrTp1Distance, minTp1Distance);
+  const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;
+  const takeProfit2 = isLong ? entryRef + tp1Distance * 1.5 : entryRef - tp1Distance * 1.5;
   const takeProfit = takeProfit1;
 
   // ── §7 confidence score (0-100, weights sum to 100) ────────────────────

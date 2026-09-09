@@ -199,10 +199,13 @@ export function confirmEntry5M(
       }
     }
     const brokeOut = breakoutIdx >= 0;
+    // Baseline here is the 5M pre-breakout window (mean of m5[-30..-10]); the
+    // 15M setup layer's breakoutVolumeMin check uses its own 20-period average.
+    // Same threshold param, deliberately different denominators per timeframe.
     const baselineVolume = mean(m5.slice(-30, -10).map((c) => c.volume)) || vol.average;
     const breakoutVolume = brokeOut && baselineVolume > 0 ? window[breakoutIdx].volume / baselineVolume : 0;
     triggerVolumeRelative = brokeOut ? breakoutVolume : vol.relative;
-    const volumeExpansion = breakoutVolume >= 1.2;
+    const volumeExpansion = breakoutVolume >= params.breakoutVolumeMin;
 
     const afterBreak = brokeOut ? window.slice(breakoutIdx + 1) : [];
     const retestHeld = afterBreak.some((c) =>
@@ -333,6 +336,11 @@ export function confirmEntry5M(
   }
   entryPrice = Number(Math.max(entryPrice, 1e-8).toFixed(8));
 
+  // Order type: LIMIT when price is near the trigger (can realistically fill),
+  // MARKET when chasing (price already ran away). The same beyondLevelAtr that
+  // feeds chasePenalty is reused here so the decision is consistent.
+  const orderType: 'LIMIT' | 'MARKET' = !isMeanReversion && beyondLevelAtr > params.maxChaseAtr ? 'MARKET' : 'LIMIT';
+
   return {
     trigger: confirmed ? trigger : trigger,
     confirmed,
@@ -340,7 +348,7 @@ export function confirmEntry5M(
     strong: entryScore >= params.entryScoreStrong,
     confirmationCount: subConditions.filter(Boolean).length,
     entryPrice,
-    orderType: 'LIMIT',
+    orderType,
     triggerLevel,
     stopReference,
     targetReference: setup.levels.targetReference,

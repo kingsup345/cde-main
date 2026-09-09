@@ -64,9 +64,10 @@ export type { AdaptiveRiskInput, ClosedTradeRecord, PerformanceWindow } from './
 // live bot. See each flag's own doc comment in intradayParams.ts.
 export const SIM_INTRADAY_PARAMS_OVERRIDE: Partial<IntradayParams> = {
   allowShortDuringHighVolatility: true,
+  // MEAN_REVERSION stop floor (buildRiskPlan): widen the 5M-swing stop that
+  // otherwise floors at minStopPercent (0.12%), tighter than the round trip.
   meanReversionMinStopAtrMult: 1.6,
   meanReversionMinStopPercent: 0.25,
-  meanReversionCloseConfirmStop: true,
   // Operator floor: no sim position opens below $100. Per the 10% target model,
   // a budget below MIN_SIM_ENTRY_USD is SKIPPED — never bumped up.
   // This override makes buildRiskPlan enforce the same floor.
@@ -205,7 +206,8 @@ export interface SimPosition {
    *  would incorrectly get held up to twice as long. */
   maxHoldMs?: number;
   timeStopMs?: number;
-   /** Needed at exit-check time to apply MEAN_REVERSION-specific stop handling — see meanReversionCloseConfirmStop in intradayParams.ts. */
+   /** Per-setup exit tuning at exit-check time: the maxHold / timeStop / trailing
+    *  activation tables in intradayExit.ts are all keyed by setup type. */
    setupType?: SetupType;
    /** Gross R:R computed from the ACTUAL fill price, not the signal price (§10/§11).
     *  The evaluation-time actualRR in Prev4hRange/RiskPlan plans is computed from
@@ -570,10 +572,6 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
     const livePrice = priceFor(pos.symbol) ?? pos.currentPrice;
     const candles5 = buildCandlesForSymbol(pos.symbol);
     const atr5 = computeAtr5(candles5);
-    // Last fully-CLOSED 5M candle's close — used only for MEAN_REVERSION's
-    // close-confirmed stop (meanReversionCloseConfirmStop). candles5 already
-    // excludes the forming candle, so its last element IS the last closed one.
-    const lastClosedCandleClose = candles5.length ? candles5[candles5.length - 1].close : undefined;
 
     const currentEval = evaluations.find((e) => e.symbol === pos.symbol);
     const decision = currentEval?.decision;
@@ -606,8 +604,7 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
       atr5,
       { dailyDrawdownPercent, weeklyDrawdownPercent },
       reversal,
-      { ...DEFAULT_INTRADAY_PARAMS, ...SIM_INTRADAY_PARAMS_OVERRIDE },
-      lastClosedCandleClose
+      { ...DEFAULT_INTRADAY_PARAMS, ...SIM_INTRADAY_PARAMS_OVERRIDE }
     );
 
     if (!exitCheck.shouldExit) continue;
