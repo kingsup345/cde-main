@@ -195,9 +195,7 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
   // closing a winning position too early on a temporary signal flip.
   const tpLevel = pos.takeProfit1 ?? (isLong ? pos.entryPrice * 1.03 : pos.entryPrice * 0.97);
   const slLevel = pos.stopLoss;
-  const beyondTp = isLong ? price >= tpLevel : price <= tpLevel;
-  const beyondSl = isLong ? price <= slLevel : price >= slLevel;
-  if ((beyondTp || beyondSl) && ctx.reversalSignal && ctx.reversalSignal.entryConfirmed && ctx.reversalSignal.setupScore >= 70) {
+  if (ctx.reversalSignal && ctx.reversalSignal.entryConfirmed && ctx.reversalSignal.setupScore >= 70) {
     const opposite = isLong ? ctx.reversalSignal.direction === 'SHORT' : ctx.reversalSignal.direction === 'LONG';
     if (opposite) {
       return {

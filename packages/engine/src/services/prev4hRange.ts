@@ -89,7 +89,7 @@ export function maxAdmissibleExtensionMult(p: Prev4hRangeParams): number {
 
 export const DEFAULT_PREV4H_RANGE_PARAMS: Prev4hRangeParams = {
   emaPeriod: 20,
-  minRangePct: 0.005,
+  minRangePct: 0.015,
   maxRangePct: 0.08,
   tpRangeMult: 1.0,
   riskPerTrade: 0.005,
@@ -266,6 +266,15 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   }
 
   const isLong = direction === 'LONG';
+  
+  // RISK_VS_COST gate
+  const structuralStop = mid;
+  const entryRefForCost = currentPrice;
+  const stopDistancePct = (Math.abs(entryRefForCost - structuralStop) / entryRefForCost) * 100;
+  const estimatedRoundTripCost = 0.35; // 0.1% Taker + 0.1% Taker + Spread + Slippage
+  if (stopDistancePct < 2.0 * estimatedRoundTripCost) {
+    return base('ARMED', 'RISK_VS_COST', debug, { confidence: 0 });
+  }
   const breakoutDist = isLong ? currentPrice - H : L - currentPrice;
   // One admissible band, shared with the confidence score below. Previously
   // this used maxExtensionRangeMult (0.5) directly and the RR check further
@@ -288,7 +297,6 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   // it risks 4.2% or less. When the entry sits far enough above H that half the
   // range is a bigger loss than that, the shared cap pulls it in (operator
   // decision 2026-09-08) — the cap only ever REDUCES risk.
-  const structuralStop = mid;
   const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
   const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
   const riskPerUnit = Math.abs(entryRef - stopLoss);
@@ -298,7 +306,12 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   // prev-4H range would otherwise let TP1 fire at +0.5%, below the 3% floor.
   // The `minRR` gate below still rejects setups whose stop (range midpoint) is
   // so wide that 3% is a sub-1.2 reward:risk.
-  const { takeProfit1, takeProfit2 } = takeProfitLevels(entryRef, isLong, TP1_PERCENT, TP2_PERCENT);
+  const rUnit = Math.abs(entryRef - stopLoss);
+  const minTp1Distance = entryRef * TP1_PERCENT / 100; // 3% floor
+  const dynamicTp1Distance = rUnit * p.tpRangeMult; // Usually 2.0x R:R since stop is mid and TP is range mult
+  const tp1Distance = Math.max(dynamicTp1Distance, minTp1Distance);
+  const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;
+  const takeProfit2 = isLong ? entryRef + tp1Distance * 1.5 : entryRef - tp1Distance * 1.5;
   const takeProfit = takeProfit1;
   const tpCapped = false;
 

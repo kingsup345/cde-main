@@ -66,7 +66,7 @@
  */
 
 import type { Candle } from './tradeEngine';
-import { formatDynamicPrice, roundToPriceScale } from './tradeEngine';
+import { formatDynamicPrice, roundToPriceScale, calculateEMA } from './tradeEngine';
 import {
   analyzeVolumeTrend,
   calculateRSI,
@@ -249,7 +249,7 @@ export interface ProSignalResult {
   confidence: number;
   signals: ProIndicatorSignal[];
   /** Full per-indicator breakdown, for the technical-score line in the UI. */
-  indicators: TechnicalIndicators;
+  indicators: TechnicalIndicators & { isDowntrend?: boolean; ema50?: number; ema200?: number };
 }
 
 /**
@@ -279,6 +279,17 @@ export function computeProSignal(
     prices
   );
   const volumeTrend = analyzeVolumeTrend(volumes);
+
+  const ema50Series = calculateEMA(prices, 50);
+  const ema200Series = calculateEMA(prices, 200);
+  const ema50 = ema50Series[ema50Series.length - 1] ?? currentPrice;
+  const ema200 = ema200Series[ema200Series.length - 1] ?? currentPrice;
+  const ema50Prev = ema50Series[ema50Series.length - 2] ?? ema50;
+  const ema50Prev2 = ema50Series[ema50Series.length - 3] ?? ema50Prev;
+  
+  const isDowntrend = ema50 < ema200 && currentPrice < ema50;
+  // Alternative condition mentioned: negative slope in last 3 candles
+  // const isDowntrend = (ema50 < ema200 && currentPrice < ema50) || (ema50 < ema50Prev && ema50Prev < ema50Prev2);
 
   const signals: ProIndicatorSignal[] = [];
   voteRsi(rsi, signals);
@@ -339,7 +350,7 @@ export function computeProSignal(
     totalWeight,
     confidence,
     signals,
-    indicators: { rsi, ma20, volumeTrend, bollingerBands: bb, volumeProfile: vp, macd, stochastic }
+    indicators: { rsi, ma20, volumeTrend, bollingerBands: bb, volumeProfile: vp, macd, stochastic, isDowntrend, ema50, ema200 }
   };
 }
 

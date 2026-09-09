@@ -170,9 +170,10 @@ describe('Prev4hRange TP ladder (flat 3% / 4.5% — operator rule 2026-09-08)', 
   // flat ladder so no position ever takes profit below +3%. TP1/TP2 are now
   // fixed percentages of the entry, independent of breakout distance or range.
   it('Test 5: near-touch breakout → TP1 at +3%, TP2 at +4.5%', () => {
-    const H = 100.2;
-    const L = 99.8;
-    const { h1, now } = buildH1ForPrevBar(H, L, 95);
+    // Wide range (4%) so stop distance (entry≈104 → mid=102 → ~1.9%) clears the RISK_VS_COST gate (needs >0.7%).
+    const H = 104;
+    const L = 100;
+    const { h1, now } = buildH1ForPrevBar(H, L, 90);
     const currentPrice = H + 0.0001; // ~d=0 breakout
     const ev = evaluatePrev4hRange({
       symbol: 'TEST',
@@ -188,11 +189,11 @@ describe('Prev4hRange TP ladder (flat 3% / 4.5% — operator rule 2026-09-08)', 
   });
 
   it('Test 6: extended breakout → SAME flat TP1 +3% / TP2 +4.5% (not range-scaled)', () => {
-    const H = 100.2;
-    const L = 99.8;
+    const H = 104;
+    const L = 100;
     const range = H - L;
-    const { h1, now } = buildH1ForPrevBar(H, L, 95);
-    const currentPrice = H + range * 0.5;
+    const { h1, now } = buildH1ForPrevBar(H, L, 90);
+    const currentPrice = H + range * 0.1; // Extended but within admissible band
     const ev = evaluatePrev4hRange({
       symbol: 'TEST',
       h1,

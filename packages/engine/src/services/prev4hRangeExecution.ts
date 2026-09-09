@@ -151,8 +151,8 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
       continue;
     }
 
-    if (now >= barOpenFor(pos.openTimestamp) + BAR_MS) {
-      reason = 'יציאה בסוף נר ה-4H (time stop)';
+    if (now >= pos.openTimestamp + BAR_MS) {
+      reason = 'יציאה אחרי 4 שעות (time stop)';
     } else if (reachedStop(live, effectiveStopLoss, isLong)) {
       reason = `Stop Loss ב-${effectiveStopLoss} (${pnlPct.toFixed(2)}%, תקרה ${MAX_LOSS_PERCENT}%)`;
     } else if (tp2Reached) {

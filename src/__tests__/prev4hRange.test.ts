@@ -50,13 +50,13 @@ function nowInNextWindow(n: number, startTs = 0): number {
 describe('evaluatePrev4hRange — signal', () => {
   const N = 108; // 27 full 4H bars
 
-  // prev 4H bar of h1Series(108,100,0.3): H=132.3, L=131.0, mid=131.65, range=1.3.
-  // A LONG breakout must sit in (132.3, 132.3 + range·0.5 = 132.95].
-  // RR at d=0: 2.0; at d=0.5*range: 0.5. minRR=1.2 requires d <= 0.236.
-  const BREAKOUT_LONG = 132.53;
+  // prev 4H bar of h1Series(108,50,0.5): H=103.7, L=101.8, mid=102.75, range=1.9.
+  // A LONG breakout must sit in (103.7, 103.7 + range·0.5 = 104.65].
+  // RR at d=0: 2.0; at d=0.5*range: 0.5. minRR=1.2 requires d <= 0.236 * 1.9 = 0.448.
+  const BREAKOUT_LONG = 104.0;
 
   it('fires a LONG SPOT SIGNAL on a breakout above the prev-4H high in an EMA20 uptrend', () => {
-    const h1 = h1Series(N, 100, 0.3);
+    const h1 = h1Series(N, 50, 0.5);
     const ev = evaluatePrev4hRange({ symbol: 'RNG', h1, currentPrice: BREAKOUT_LONG, now: nowInNextWindow(N) });
     expect(ev.willExecute).toBe(true);
     expect(ev.tradeSide).toBe('LONG');
@@ -78,49 +78,49 @@ describe('evaluatePrev4hRange — signal', () => {
   });
 
   it('abstains with RANGE_TOO_TIGHT when the prev bar barely moved', () => {
-    const h1 = h1Series(N, 100, 0.3);
+    const h1 = h1Series(N, 50, 0.5);
     const ev = evaluatePrev4hRange({
       symbol: 'RNG', h1, currentPrice: BREAKOUT_LONG, now: nowInNextWindow(N),
-      params: { minRangePct: 0.5 } // demand a 50% range → the ~1% real range fails
+      params: { minRangePct: 0.05 } // demand a 5% range → the ~1.8% real range fails
     });
     expect(ev.status).toContain('RANGE_TOO_TIGHT');
   });
 
   it('abstains with ENTRY_TOO_EXTENDED when price has already run far past the break level', () => {
-    const h1 = h1Series(N, 100, 0.3);
+    const h1 = h1Series(N, 50, 0.5);
     const ev = evaluatePrev4hRange({ symbol: 'RNG', h1, currentPrice: 200, now: nowInNextWindow(N) });
     expect(ev.willExecute).toBe(false);
     expect(ev.status).toContain('ENTRY_TOO_EXTENDED');
   });
 
   it('is ARMED (NO_BREAKOUT) while price is still inside the prev range', () => {
-    const h1 = h1Series(N, 100, 0.3);
-    const prevClose = 100 + (N - 1) * 0.3;
+    const h1 = h1Series(N, 50, 0.5);
+    const prevClose = 50 + (N - 1) * 0.5;
     const ev = evaluatePrev4hRange({ symbol: 'RNG', h1, currentPrice: prevClose, now: nowInNextWindow(N) });
     expect(ev.willExecute).toBe(false);
     expect(ev.status).toContain('NO_BREAKOUT');
   });
 
   it('abstains with STALE_BAR when H1 data is not current for this window', () => {
-    const h1 = h1Series(N, 100, 0.3);
+    const h1 = h1Series(N, 50, 0.5);
     const ev = evaluatePrev4hRange({ symbol: 'RNG', h1, currentPrice: BREAKOUT_LONG, now: nowInNextWindow(N) + 10 * BAR_MS });
     expect(ev.status).toContain('STALE_BAR');
   });
 
   it('abstains with NO_DATA below the minimum candle count (< 4)', () => {
     // Fallback mode kicks in at 4 H1 candles (1 H4 bar). Below that is NO_DATA.
-    const ev = evaluatePrev4hRange({ symbol: 'THIN', h1: h1Series(3, 100, 0.3), currentPrice: 120, now: nowInNextWindow(3) });
+    const ev = evaluatePrev4hRange({ symbol: 'THIN', h1: h1Series(3, 50, 0.5), currentPrice: 120, now: nowInNextWindow(3) });
     expect(ev.status).toContain('NO_DATA');
   });
 
   it('is lookahead-free: appending a partial current-window H1 candle does not change the decision', () => {
-    const h1 = h1Series(N, 100, 0.3);
+    const h1 = h1Series(N, 50, 0.5);
     const now = nowInNextWindow(N);
     const a = evaluatePrev4hRange({ symbol: 'RNG', h1, currentPrice: BREAKOUT_LONG, now });
     expect(a.willExecute).toBe(true); // exercising a real SIGNAL path
     // 2 more H1 candles in the forming window — aggregateToH4 drops the
     // incomplete group, so `prev` is unchanged.
-    const partial = h1Series(N + 2, 100, 0.3);
+    const partial = h1Series(N + 2, 50, 0.5);
     const b = evaluatePrev4hRange({ symbol: 'RNG', h1: partial, currentPrice: BREAKOUT_LONG, now });
     expect(b.confidence).toBe(a.confidence);
     expect(b.status).toBe(a.status);
@@ -128,8 +128,8 @@ describe('evaluatePrev4hRange — signal', () => {
   });
 
   it('confidence stays within 0-100', () => {
-    const h1 = h1Series(N, 100, 0.3);
-    const ev = evaluatePrev4hRange({ symbol: 'RNG', h1, currentPrice: 132.53, now: nowInNextWindow(N) });
+    const h1 = h1Series(N, 50, 0.5);
+    const ev = evaluatePrev4hRange({ symbol: 'RNG', h1, currentPrice: 104.0, now: nowInNextWindow(N) });
     expect(ev.confidence).toBeGreaterThan(0);
     expect(ev.confidence).toBeLessThanOrEqual(100);
   });
@@ -154,6 +154,6 @@ describe('generatePrev4hRangeOrders — window-end time stop', () => {
     expect(orders).toHaveLength(1);
     expect(orders[0].side).toBe('close_long');
     expect(orders[0].positionId).toBe('p1');
-    expect(orders[0].reason).toContain('סוף נר');
+    expect(orders[0].reason).toContain('4 שעות');
   });
 });
