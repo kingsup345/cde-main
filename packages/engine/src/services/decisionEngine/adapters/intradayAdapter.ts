@@ -220,7 +220,12 @@ class RunEngineStage implements PipelineStage<DecisionContext> {
         ...(context.config?.maxFuturesPositions !== undefined ? { maxOpenFutures: context.config.maxFuturesPositions } : {})
       },
       now: context.now,
-      existingExposureByAsset: context.portfolio.existingExposureByAsset
+      existingExposureByAsset: context.portfolio.existingExposureByAsset,
+      // Price the §25 cost gate on the fill the caller will actually get. The
+      // sims pass `proLimitEntries === true`; when it's false the gate now
+      // prices the taker fee + full slippage a market entry really pays instead
+      // of the cheaper resting-limit assumption. Absent → engine default (true).
+      entryIsLimit: context.config?.entryIsLimit
     };
 
     const result = evaluateIntradayDecision(input);

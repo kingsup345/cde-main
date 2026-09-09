@@ -241,6 +241,18 @@ export function effectiveStop(
   }
   // Never loosen past the original protective stop.
   stop = isLong ? Math.max(stop, stop0) : Math.min(stop, stop0);
+  // Scale-in lots are entered progressively further from stop0 than lot 0 —
+  // a lot added at +0.5R sits 1.5R from the shared stop. Without this, a
+  // reversal loses MORE on that lot than a clean −1R stop-out would, so the
+  // logical trade's downside grows every time it scales. Pull the shared stop
+  // up (down, for a short) so the WORST-positioned lot never risks more than
+  // rUnit (= |entry0 − stop0|, already ≤ the 4.2% cap). Single-lot trade:
+  // worstEntry === entry0 → scaleFloor === stop0 → inert.
+  const worstEntry = isLong
+    ? Math.max(...lt.lots.map((l) => l.entryPrice))
+    : Math.min(...lt.lots.map((l) => l.entryPrice));
+  const scaleFloor = isLong ? worstEntry - rUnit : worstEntry + rUnit;
+  stop = isLong ? Math.max(stop, scaleFloor) : Math.min(stop, scaleFloor);
   // Apply the shared 4.2% loss cap — tightens stop if needed, never loosens.
   // The signal computed structuralStop from slAtrMultiplier×ATR; trailing may
   // have loosened it, but the policy ceiling applies to all exits (operator
@@ -280,6 +292,13 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     // The shared cap below is the emergency brake that still fires on touch.
     // Defensive fallback: with no M15 series the stop reverts to touch behaviour.
     const capLevel = maxLossStopLevel(first.entryPrice, isLong);
+    // The 4.2% cap must bound EVERY lot, not just lot 0: a scale-in lot entered
+    // up to 1R higher hits its own −4.2% before lot 0's capLevel is reached. If
+    // an intrabar gap blows past effectiveStop's scaleFloor, this catches the
+    // worst lot regardless of which lot anchors the shared level.
+    const worstLotLossPct = Math.max(
+      ...lt.lots.map((l) => -positionPnlPercent(l.entryPrice, live, isLong))
+    );
 
     const pnlPct = positionPnlPercent(first.entryPrice, live, isLong);
     const tp2 = first.takeProfit2;
@@ -312,7 +331,7 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
     }
 
     let reason = '';
-    if (reachedStop(live, capLevel, isLong)) {
+    if (reachedStop(live, capLevel, isLong) || worstLotLossPct >= MAX_LOSS_PERCENT) {
       reason = `חריגת תקרת הפסד ${MAX_LOSS_PERCENT}% בתוך נר — יציאת חירום (${pnlPct.toFixed(2)}%)`;
     } else if (reachedStop(live, stop, isLong)) {
       // "תקרה" only when the cap is what actually binds the stop (capStopLoss

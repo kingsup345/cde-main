@@ -70,6 +70,16 @@ export const SIM_INTRADAY_PARAMS_OVERRIDE: Partial<IntradayParams> = {
   // otherwise floors at minStopPercent (0.12%), tighter than the round trip.
   meanReversionMinStopAtrMult: 1.6,
   meanReversionMinStopPercent: 0.25,
+  // RISK_VS_COST floor 2.0 → 2.5 (2026-09-10). Now that the cost gate prices
+  // the real MARKET fill (entryIsLimit wired through), a 2.0× multiple still
+  // let ~0.6-0.9% stops through — tight enough that ordinary 5M noise wicks
+  // them out on trades that would otherwise have worked. 2.5× ≈ a ~0.9%
+  // effective floor against a ~0.35% real round trip. Live bot keeps 2.0.
+  minStopCostMultiple: 2.5,
+  // TP2 2.5R → 2.2R (2026-09-10). With the trail now capped at 1R of the stop
+  // the 50% runner can actually reach the 2nd target instead of trailing out
+  // near +0.4R; a 2.2R target that prints beats a 2.5R target that does not.
+  tp2RewardRisk: 2.2,
   // Operator floor: no sim position opens below $100. Per the 10% target model,
   // a budget below MIN_SIM_ENTRY_USD is SKIPPED — never bumped up.
   // This override makes buildRiskPlan enforce the same floor.

@@ -110,6 +110,13 @@ export interface DecisionContext {
     maxPositions?: number;
     maxFuturesPositions?: number;
     executionDelaySec?: number;
+    /** How the entry will ACTUALLY fill, for the §25 cost/edge model. The
+     *  simulations execute MARKET by default (`proLimitEntries` off) but the
+     *  cost gate defaulted to the cheaper resting-LIMIT assumption, so every
+     *  trade was evaluated with an optimistic round-trip cost. Pass
+     *  `config.proLimitEntries === true` here. Absent → engine default (true =
+     *  the live bot / backtest, which do rest limits). */
+    entryIsLimit?: boolean;
   };
 }
 

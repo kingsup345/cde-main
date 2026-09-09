@@ -119,8 +119,14 @@ export const DEFAULT_TREND_BREAKOUT_PARAMS: TrendBreakoutParams = {
   trailingAtrMultiplier: 1.5,
   maxHoldHours: 24,
   scaleFractions: [0.5, 0.3, 0.2],
-  scale2MinR: 0.5,
-  scale3MinR: 1.0,
+  // Spec §11 has these at +0.5R / +1.0R. Moved to +1.0R / +1.5R (= breakEvenR /
+  // trailingStartR) 2026-09-09: adding 60% more size at +0.5R — before the stop
+  // has even reached break-even — meant a normal breakout retest turned a small
+  // winner into a loss larger than a clean −1R stop-out. Now a scale-in only
+  // lands once the trade has locked break-even (SCALE_2) or armed the trail
+  // (SCALE_3), and effectiveStop pulls the shared stop up so no lot risks >1R.
+  scale2MinR: 1.0,
+  scale3MinR: 1.5,
   h1EmaFast: 50,
   h1EmaSlow: 200,
   m15EmaFast: 20,
@@ -372,8 +378,15 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
   // max(1.5% of entry, 1.5× the capped stop) — not a flat 3%, which is
   // unreachable in-horizon on a low-ATR(M15) symbol. TP2 scales from TP1 by
   // 1.5x. Trailing still measures progress in R off the (capped) stop.
-  const minTp1Distance = tp1FloorDistance(entryRef, Math.abs(entryRef - stopLoss));
-  const atrTp1Distance = rUnit * p.tpRMultiplier;
+  //
+  // "R" here is the ACTUAL (capped) stop distance, NOT the raw
+  // slAtrMultiplier×ATR — so the "2R" target means the same R that break-even,
+  // trailing and the scale-in triggers measure. On a capped-stop symbol the old
+  // `rUnit × tpRMultiplier` put TP1 at ~2.4× the capped R: unreachable in the
+  // 24-bar horizon while BE and the scale-ins had already fired in capped-R.
+  const cappedR = Math.abs(entryRef - stopLoss);
+  const minTp1Distance = tp1FloorDistance(entryRef, cappedR);
+  const atrTp1Distance = cappedR * p.tpRMultiplier;
   const tp1Distance = Math.max(atrTp1Distance, minTp1Distance);
   const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;
   const takeProfit2 = isLong ? entryRef + tp1Distance * 1.5 : entryRef - tp1Distance * 1.5;

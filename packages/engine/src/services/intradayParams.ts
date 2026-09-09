@@ -175,6 +175,15 @@ export interface IntradayParams {
   timeStopFraction: number;
   /** Favourable progress (in R) required at the time-stop checkpoint */
   timeStopMinProgressR: number;
+  /** Max favourable excursion (in R) below which a trade counts as stagnant at
+   *  the early time-stop checkpoint. A trade that once ran this far is "working,
+   *  just slowly" and keeps the full maxHold budget instead of being cut early
+   *  at a small loss (MAX_DURATION still ends it on time). */
+  timeStopStagnantMfeR: number;
+  /** Loss (in R, negative) at or below which a CONFIRMED opposite setup may
+   *  close the position on reversal. Between this and +tp1RewardRisk the
+   *  position is left to its own SL/TP/time — a reversal there is just churn. */
+  reversalMaxLossR: number;
   /** Multiplier applied to a setup's max hold when the trade is ALREADY
    *  working at the max-hold checkpoint (>= maxHoldExtensionMinProgressR).
    *  1 = no extension. A fixed clock cut is the wrong tool for a position
@@ -191,6 +200,12 @@ export interface IntradayParams {
   /** Fallback when setupType is unknown or not in the record */
   trailingActivationR: number;
   trailingAtrMult: number;
+  /** Hard cap on the trailing-stop width as a multiple of the stop distance
+   *  (R). On a structural sub-ATR stop, `trailingAtrMult × atr5` can exceed the
+   *  whole original stop, so the runner trailed out near break-even and never
+   *  reached TP2. The trail width is `min(trailingAtrMult × atr5,
+   *  trailingMaxRMult × stopDistance)` — this only ever TIGHTENS it. */
+  trailingMaxRMult: number;
 
   // ── Execution realism (§39/§40) ───────────────────────────────────────────
   limitOrderTtlMinutes: number;
@@ -372,6 +387,8 @@ export const DEFAULT_INTRADAY_PARAMS: IntradayParams = {
   maxHoldMinutes: { TREND_PULLBACK: 120, BREAKOUT_RETEST: 60, MEAN_REVERSION: 45 },
   timeStopFraction: 0.45,
   timeStopMinProgressR: 0.3,
+  timeStopStagnantMfeR: 0.7,
+  reversalMaxLossR: -0.7,
   // MEAN_REVERSION is deliberately excluded (1 = no extension): its edge is
   // the snap back to the mean and it decays with time held — extending it is
   // not patience, it is holding a thesis after its window closed.
@@ -383,6 +400,9 @@ export const DEFAULT_INTRADAY_PARAMS: IntradayParams = {
   // 1.2 → 1.8: the post-TP1 runner was trailing out near break-even before TP2
   // could print. A wider trail gives it room to actually reach the 2nd target.
   trailingAtrMult: 1.8,
+  // ...but never wider than 1R of the (possibly sub-ATR structural) stop, or
+  // the runner trails out below TP1 on symbols where atr5 > stopDistance.
+  trailingMaxRMult: 1.0,
 
   limitOrderTtlMinutes: 10,
   touchFillProbability: 0.5,

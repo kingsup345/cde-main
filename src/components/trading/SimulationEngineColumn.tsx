@@ -600,6 +600,7 @@ export default function SimulationEngineColumn({
                         takeProfit1={pos.takeProfit1}
                         leverage={pos.leverage}
                         unrealizedPnl={pnl}
+                        confidence={pos.confidence}
                       />
                     );
                   })}

@@ -175,7 +175,18 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
         ? Math.max(pos.highestPriceSinceTP1 ?? peak, price)
         : Math.min(pos.lowestPriceSinceTP1 ?? peak, price)
       : peak;
-    const trailingStopPrice = anchor - s * params.trailingAtrMult * atr5;
+    // Trail width is the TIGHTER of the ATR distance and an R-multiple of the
+    // stop. On a structural (sub-ATR) stop, `trailingAtrMult × atr5` can be
+    // 2-4R wide — wider than the whole original stop — so the runner never
+    // reached TP2: a peak just past TP1 (1.5R) minus a ~1.8R trail exits the
+    // runner near break-even. Capping the width at `trailingMaxRMult` (1R) of
+    // the stop keeps the runner in play up to TP2. It only ever TIGHTENS the
+    // trail, so it is safe for the live bot too.
+    const trailDistance = Math.min(
+      params.trailingAtrMult * atr5,
+      params.trailingMaxRMult * stopDistance
+    );
+    const trailingStopPrice = anchor - s * trailDistance;
     const trailingHit = isLong ? price <= trailingStopPrice : price >= trailingStopPrice;
     if (trailingHit && mfeR >= params.trailingActivationR * 0.8) {
       return {
@@ -190,19 +201,29 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
   }
 
   // 5 ── Reversal — an opposite, CONFIRMED setup, not a single indicator ─────
-  // Don't exit on reversal before the position has reached at least the
-  // first take-profit level (3%) or stop-loss level (1.8%) — prevents
-  // closing a winning position too early on a temporary signal flip.
-  const tpLevel = pos.takeProfit1 ?? (isLong ? pos.entryPrice * 1.03 : pos.entryPrice * 0.97);
-  const slLevel = pos.stopLoss;
-  if (ctx.reversalSignal && ctx.reversalSignal.entryConfirmed && ctx.reversalSignal.setupScore >= 70) {
+  // Act on a reversal ONLY when the trade has either proved itself (progress
+  // past the TP1 reward-risk — so we bank a real gain instead of a noise flip)
+  // or is already meaningfully underwater (thesis broken — cut it before the
+  // full stop). In the dead zone between, the position is still inside its own
+  // risk plan: let SL / TP / time decide. A choppy tape flips the setup every
+  // few bars, and exiting there just churns the book at small losses which the
+  // 30-min re-entry cooldown then locks in. (The previous version computed a
+  // guard and never applied it — the reversal fired at ANY P&L.)
+  const reversalInProfit = progressR >= (params.tp1RewardRisk ?? 1.5);
+  const reversalThesisBroken = progressR <= params.reversalMaxLossR;
+  if (
+    (reversalInProfit || reversalThesisBroken) &&
+    ctx.reversalSignal &&
+    ctx.reversalSignal.entryConfirmed &&
+    ctx.reversalSignal.setupScore >= 70
+  ) {
     const opposite = isLong ? ctx.reversalSignal.direction === 'SHORT' : ctx.reversalSignal.direction === 'LONG';
     if (opposite) {
       return {
         shouldExit: true,
         exitType: 'FULL',
         reasonCode: 'REVERSAL',
-        reason: `היפוך מאושר בכיוון הנגדי (SetupScore ${ctx.reversalSignal.setupScore})`,
+        reason: `היפוך מאושר בכיוון הנגדי (SetupScore ${ctx.reversalSignal.setupScore}, ${progressR.toFixed(2)}R)`,
         ...base
       };
     }
@@ -236,15 +257,21 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
     };
   }
 
-  // Same removal as above. `progressR < timeStopMinProgressR` IS the test for a
-  // stagnant trade; requiring the price to also be outside the stop/target band
-  // asked for the one state in which a time stop has nothing left to decide.
-  if (heldMs >= timeStopMs && progressR < params.timeStopMinProgressR) {
+  // Stagnant = little forward progress AND never printed a real favourable
+  // excursion. A trade that once ran to +0.7R (mfeR) is working, just slowly —
+  // it has earned the full maxHold budget (MAX_DURATION above still ends it on
+  // time), so the early 0.7× checkpoint no longer cuts it at a small loss.
+  // Those early cuts were a large share of the bot's losing-trade COUNT.
+  if (
+    heldMs >= timeStopMs &&
+    progressR < params.timeStopMinProgressR &&
+    mfeR < params.timeStopStagnantMfeR
+  ) {
     return {
       shouldExit: true,
       exitType: 'FULL',
       reasonCode: 'TIME_STOP',
-      reason: `Time Stop: אחרי ${heldMinutes} דק' התקדמות ${progressR.toFixed(2)}R < ${params.timeStopMinProgressR}R`,
+      reason: `Time Stop: אחרי ${heldMinutes} דק' התקדמות ${progressR.toFixed(2)}R < ${params.timeStopMinProgressR}R (MFE ${mfeR.toFixed(2)}R)`,
       ...base
     };
   }

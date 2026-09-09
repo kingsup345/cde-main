@@ -513,14 +513,17 @@ export function useSimulationBot({ config, isRunning, cryptoData, recommendation
         config: {
           minConfidenceOverride: config.minConfidenceOverride,
           maxPositions: config.maxPositions || 7,
-          maxFuturesPositions: config.maxFuturesPositions || 2
+          maxFuturesPositions: config.maxFuturesPositions || 2,
+          // Match the browser twin's cost gate to its actual fill mode (market
+          // unless limit entries are on) — same fix as server/simEngine.ts.
+          entryIsLimit: config.proLimitEntries === true
         }
       };
 
       const result = engine.evaluate(context, 'intraday');
       return toSignalEvaluation(result, currentPrice, priceChange24h);
     });
-  }, [cryptoData, mtfData, positions, equity, config.initialAmount, config.maxPositions, config.maxFuturesPositions, config.minConfidenceOverride, dailyDrawdownPercent, weeklyDrawdownPercent, totalLeveragedExposureUsd, closedTradeRecords, engine, exposureByAsset, correlationCandles]);
+  }, [cryptoData, mtfData, positions, equity, config.initialAmount, config.maxPositions, config.maxFuturesPositions, config.minConfidenceOverride, config.proLimitEntries, dailyDrawdownPercent, weeklyDrawdownPercent, totalLeveragedExposureUsd, closedTradeRecords, engine, exposureByAsset, correlationCandles]);
 
   // Purely derived from evaluations — a useState+useEffect pair here previously
   // added an extra setState-triggered render on every evaluations change,

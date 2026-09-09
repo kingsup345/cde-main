@@ -124,6 +124,14 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
     // signal-side cap existed (stored stop = range midpoint, which can sit
     // past 4.2%) has its effective stop pulled in here — never loosened.
     const effectiveStopLoss = capStopLoss(pos.entryPrice, pos.stopLoss, isLong);
+    // After TP1 the runner is protected at BREAK-EVEN and rides on to TP2, the
+    // 4H time stop, or an EMA reversal. It used to be closed on the FIRST tick
+    // back below TP1 — a hair-trigger that clipped the runner before it could
+    // reach the 2nd target (a 0.1% dip after a TP1 touch closed it). Break-even
+    // means the runner half can never turn into a loss.
+    const runnerStop = pos.tp1Hit
+      ? (isLong ? Math.max(effectiveStopLoss, pos.entryPrice) : Math.min(effectiveStopLoss, pos.entryPrice))
+      : effectiveStopLoss;
     let reason = '';
 
     // TP1 closes half and lets the rest run to TP2 (operator decision
@@ -153,13 +161,12 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
 
     if (now >= pos.openTimestamp + BAR_MS) {
       reason = 'יציאה אחרי 4 שעות (time stop)';
-    } else if (reachedStop(live, effectiveStopLoss, isLong)) {
-      reason = `Stop Loss ב-${effectiveStopLoss} (${pnlPct.toFixed(2)}%, תקרה ${MAX_LOSS_PERCENT}%)`;
+    } else if (reachedStop(live, runnerStop, isLong)) {
+      reason = pos.tp1Hit && Math.abs(runnerStop - pos.entryPrice) <= Math.abs(pos.entryPrice) * 1e-9
+        ? `Break-even stop אחרי TP1 ב-${runnerStop} (${pnlPct.toFixed(2)}%)`
+        : `Stop Loss ב-${runnerStop} (${pnlPct.toFixed(2)}%, תקרה ${MAX_LOSS_PERCENT}%)`;
     } else if (tp2Reached) {
       reason = `TP2 הושג ב-${pos.takeProfit2} (+${pnlPct.toFixed(2)}%)`;
-    } else if (pos.tp1Hit && tp1 && !reachedTarget(live, tp1, isLong)) {
-      // The runner gave back TP1 — bank what is left rather than round-trip it.
-      reason = `חזרה מתחת ל-TP1 אחרי יציאה חלקית (+${pnlPct.toFixed(2)}%)`;
     } else {
       const trend = h4EmaTrend(ctx.candlesBySymbol[pos.symbol]?.h1, p.emaPeriod);
       // Close only on an outright REVERSAL (trend now points the other way),

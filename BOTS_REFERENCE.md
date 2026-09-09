@@ -89,8 +89,8 @@ p.weeklyDrawdownPercent >= 15  → NO_SIGNAL (נעילה)
 SL  = ההדוק מבין: atr5 × maxStopAtrMult  |  |entry - (stopReference ∓ buffer)|
       clamp ל-[minStopPercent 0.12% , maxStopPercent 1.5%] ואז תקרת 4.2%
       MEAN_REVERSION: רצפה נוספת — meanReversionMinStop{AtrMult,Percent}
-TP1 = הרחוק מבין: SL × tp1RewardRisk  |  |targetReference - entry|  |  רצפת 3%
-TP2 = TP1 × (tp2RewardRisk / tp1RewardRisk)
+TP1 = הרחוק מבין: SL × tp1RewardRisk  |  |targetReference - entry|  |  רצפת tp1FloorDistance
+TP2 = TP1 × (tp2RewardRisk / tp1RewardRisk)   [SIM: tp2RewardRisk 2.5→2.2, 2026-09-10]
 ```
 `FIXED_TP_PERCENT = 3.0` הוא הקבוע היחיד שנשאר — **רצפת** ה-TP1 לכל setup
 **חוץ מ-MEAN_REVERSION** (שהיעד שלו הוא ה-VWAP, מבנית מתחת ל-3% בדשדוש; רצפת
@@ -103,8 +103,17 @@ TP2 = TP1 × (tp2RewardRisk / tp1RewardRisk)
 בטלמטריה. `validateLevelDirection` תופס סטופ/TP בצד הלא נכון.
 
 **שער `RISK_VS_COST`** (`evaluateCostEdge`): נדחה כש-`riskPercent <
-minStopCostMultiple (2.0) × totalCostPercent` — סטופ צר מכדי לשרוד את סבב
+minStopCostMultiple × totalCostPercent` — סטופ צר מכדי לשרוד את סבב
 העמלות+slippage שלו, מקרה ש-`netRewardRisk` (שמחלק ב-risk) עיוור אליו.
+בבוט האמיתי המכפיל 2.0; **בסימולציה 2.5** (2026-09-10) — ראה למטה.
+
+**תמחור העלות תואם את מצב המילוי (2026-09-10):** `entryIsLimit` מוברר עכשיו
+`DecisionContext.config` → `intradayAdapter` → `evaluateIntradayDecision`. הסימולציה
+מבצעת MARKET כברירת מחדל (`proLimitEntries` כבוי), אבל `evaluateCostEdge` תמחר את
+המילוי הזול (LIMIT נח) — כל עסקה נבחנה עם עלות סבב אופטימית, ושני השערים
+(`netRR ≥ 1.2` וגם `RISK_VS_COST`) קיבלו מספר מוטה. עכשיו `config.proLimitEntries
+=== true` עובר פנימה; MARKET → taker + slippage מלא. הבוט האמיתי / backtest
+(שמניחים LIMIT נח) — ללא שינוי (ברירת מחדל `entryIsLimit = true`).
 
 **R:R** מחושב תמיד מ-3 המספרים של `buildRiskPlan`:
 ```
@@ -251,8 +260,16 @@ H = prev.high · L = prev.low · mid = (H+L)/2 · range = H−L · rangePct = ra
 
 ### חישוב הביטחון (Score 0–100 — לא הסתברות!)
 ```
-40 + 30·clamp(breakoutDist/(range·0.5)) + 20·trendStrength + 10·rangeSweetSpot
+40 + 30·clamp(1 − breakoutDist/(range·maxExtension)) + 20·trendStrength + 10·(1−bandPos)
 ```
+**הרכיבים הופכו 2026-09-10** (משיכה לעסקאות גרועות): פעם `breakout` תגמל
+פריצה **מתוחה** (30 נק' ל-d ליד הקצה, 0 למגע נקי) ו-`rangeScore` תגמל טווח
+בינוני (~3.9%). מכיוון שההזמנות נוצרות לפי ביטחון יורד תחת סלוטים/מזומן
+מוגבלים — הבוט מילא קודם את ה-setups הכי גרועים (סטופ `mid` רחב, מהלך שכבר
+נעשה), וליד סף ה-55 אף דחה מגעים נקיים. עכשיו: **מגע נקי → ביטחון גבוה**,
+טווח צר (סטופ צר → TP1 מושג בחלון 4H) → ביטחון גבוה. `ENTRY_TOO_EXTENDED`
+(`breakoutDist > range·maxExtension`, ≈0.1818·range) נשאר החסם הקשה.
+
 סף כניסה `minConfidence = 55` (`SIM_BOTS.path.minConfidence`). **קנה מידה
 משותף ל-Intraday/Pro/Bybit** — `BOT_MIN_CONFIDENCE` מגיע אליו עכשיו כמו לשאר
 (מנוע ה-Wilson/probability הישן נעלם).
@@ -267,10 +284,14 @@ notional = riskUsd / (R/entry)          ← R = |entry − mid| = range/2
 
 ### יציאה
 ```
-SL = mid (אמצע הטווח)
-TP = H + range×tpRangeMult (LONG) / L − range×tpRangeMult (SHORT)   [ברירת מחדל ×1 → ~2:1]
-Time stop: סוף החלון — now >= barOpenFor(openTimestamp) + BAR_MS
-היפוך: EMA20 (4H) כבר לא בכיוון הפוזיציה
+SL   = mid (אמצע הטווח), נחתך לתקרת 4.2%
+TP1  = max(R×tpRangeMult, tp1FloorDistance)   R = |entry − mid|   ·   50% נסגר
+TP2  = TP1 × 1.5   ·   הרץ (50% שנותר):
+       אחרי TP1 → סטופ עולה ל-BREAK-EVEN (2026-09-10); רץ ל-TP2 / time-stop /
+       היפוך EMA. פעם נסגר על הטיק הראשון מתחת ל-TP1 — hair-trigger שגזז את
+       הרץ לפני TP2.
+Time stop: now >= pos.openTimestamp + BAR_MS  (4 שעות מהכניסה)
+היפוך: EMA20 (4H) התהפך לכיוון הנגדי (לא על בר שטוח — רק היפוך מובהק)
 ```
 
 ### מעגל שבירה ותקרת נכס
@@ -328,8 +349,9 @@ H1 Supertrend 25 · H1 EMA 20 · פריצת M15 25 · אישור נפח 15 · א
 ### Scale-in (§11) — מודל lots
 `fillDueOrders` לא יודע להוסיף לפוזיציה, לכן כל scale הוא `SimPosition` נפרד.
 עסקה לוגית אחת = כל ה-lots עם אותו נכס-בסיס + כיוון, אותו SL/TP לוגי, נסגרים
-יחד. לוטים 50/30/20% מ-`fullNotional`. SCALE_2 רק מעל +0.5R + מגמה תקפה;
-SCALE_3 רק מעל +1.0R + Supertrend עדיין בכיוון. אף פעם לא מוסיפים בהפסד
+יחד. לוטים 50/30/20% מ-`fullNotional`. SCALE_2 רק מעל **+1.0R** + מגמה תקפה;
+SCALE_3 רק מעל **+1.5R** + Supertrend עדיין בכיוון (הועבר מ-+0.5R/+1.0R
+ב-2026-09-09 — ראה TRENDBREAKOUT_SPEC.md §11). אף פעם לא מוסיפים בהפסד
 (אין מרטינגייל / averaging-down). SCALE_1 מעוגל כלפי מעלה ל-`MIN_SIM_ENTRY_USD`
 ($100) אם צריך; SCALE_2/3 שנחתכים מתחת ל-$100 פשוט מדולגים (עיגול היה שובר
 את יחס ה-50/30/20).
@@ -337,7 +359,10 @@ SCALE_3 רק מעל +1.0R + Supertrend עדיין בכיוון. אף פעם לא
 ### ניהול סטופ (§12) — מחושב מחדש בכל tick
 מ-entry קבוע + ה-highest/lowest ש-factory כבר עוקב אחריו (הקוד אף פעם לא
 משנה את `pos.stopLoss`). ב-+1R → סטופ אפקטיבי = entry (break-even). ב-+1.5R →
-טריילינג `extreme ∓ 1.0×ATR(M15)`, מונוטוני בכיוון הרווח, לעולם לא מתרופף.
+טריילינג `extreme ∓ 1.5×ATR(M15)`, מונוטוני בכיוון הרווח, לעולם לא מתרופף.
+**הגבלת סיכון ל-scale-in (2026-09-09):** הסטופ המשותף לעולם לא רופף מ-`(entry
+של הלוט הכי גרוע) ∓ R` — אף לוט לא מסתכן ביותר מ-1R. בלם חירום per-lot: לוט
+כלשהו יותר מ-4.2% בהפסד מהכניסה שלו → יציאת חירום. ליחיד-לוט אין שינוי.
 
 ### יציאות (§13)
 סטופ אפקטיבי נחצה · TP (2R) · היפוך H1 Supertrend נגד הפוזיציה · Time Stop

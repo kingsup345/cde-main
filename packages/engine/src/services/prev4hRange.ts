@@ -334,8 +334,21 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
     return base('ARMED', 'RR_BELOW_MIN', debug, { confidence: 0 });
   }
 
-  const rangeScore = (1 - Math.abs(bandPos - 0.4) / 0.6) * 10;
-  const breakout = clamp01(breakoutDist / (range * maxExtension)) * 30;
+  // rangeScore: prefer a TIGHT reference range (down to the minRangePct floor).
+  // A tight 4H range → a tight `mid` stop → a TP1 that is actually reachable
+  // inside the one 4H window this bot trades. The old peak at bandPos 0.4 (~3.9%
+  // range → ~1.9% stop → ~2.9% TP1) rewarded the setups whose target never
+  // prints in-window. minRangePct already hard-rejects genuine noise below it.
+  const rangeScore = clamp01(1 - bandPos) * 10;
+  // breakout: reward a CLEAN touch of H/L, not an extended entry. A larger
+  // breakoutDist means (a) a wider `mid` stop — more dollar risk, (b) the move
+  // is mostly made — less follow-through, (c) more likely to mean-revert. The
+  // old formula scored a clean touch 0 and a stretched entry 30, so — since
+  // order priority is confidence-descending under limited slots/cash, and 40 +
+  // this can sit right at the 55 floor — the bot filled its WORST admissible
+  // setups first and could reject the clean ones outright. ENTRY_TOO_EXTENDED
+  // (breakoutDist > range·maxExtension) stays the hard cap.
+  const breakout = clamp01(1 - breakoutDist / (range * maxExtension)) * 30;
   const trendStrength = clamp01(Math.abs(ema - emaPrev) / (emaPrev * 0.01)) * 20;
   const confidence = Math.round(40 + breakout + trendStrength + Math.max(0, rangeScore));
 
