@@ -156,8 +156,12 @@ netRR         = (rewardPercent − totalCostPercent) / riskPercent      ← נד
 
 ### יציאות (`intradayExit.ts`, לפי עדיפות)
 - **Stop / TP1 / TP2** לפי הרמות למעלה.
-- **Trailing** אחרי התקדמות: `trailDistance = min(trailingAtrMult·atr5, trailingMaxRMult·|entry−SL|)`,
-  `trailStop = anchor ∓ trailDistance` (R-capped — לא מתרחב מעבר ל-1R).
+- **Trailing** אחרי שהעסקה הוכיחה TP1: `trailDistance = min(trailingAtrMult·atr5,
+  trailingMaxRMult·|entry−SL|)`, `trailStop = anchor ∓ trailDistance` (R-capped — לא
+  מתרחב מעבר ל-1R). **"הוכיחה TP1" = `tp1Hit` או `mfeR ≥ tp1RewardRisk`** — לא
+  "המחיר החי מעל TP1". קודם השער בדק מחיר חי; רץ שנסוג מתחת ל-TP1 כיבה את
+  ה-trailing בדיוק כשצריך אותו (נצפה: רץ ENA ב-+2.0R נסוג מתחת ל-TP1 והמשיך
+  לרדת עם SL קשיח בלבד). התיקון רק מוסיף הגנה → בטוח גם ל-live.
 - **Reversal:** רק אם `progressR ≥ tp1RewardRisk` **או** `progressR ≤ reversalMaxLossR (−0.7)`,
   ובנוסף `reversalSignal` + `entryConfirmed` + `setupScore ≥ 70`.
 - **Time stop:** `heldMs ≥ timeStopMs` **וגם** `progressR < timeStopMinProgressR`

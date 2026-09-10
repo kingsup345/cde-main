@@ -163,6 +163,41 @@ describe('#4 — post-TP1 trail width is capped at 1R of the stop', () => {
   });
 });
 
+describe('#6 — the trailing stop stays armed after a runner pulls back through TP1', () => {
+  // Observed on the worker: an ENA MEAN_REVERSION runner (tp1Hit) peaked at
+  // +2.0R, fell back below TP1, and then drifted down with only the hard SL,
+  // because `trailingActive` was gated on the LIVE price being >= TP1. The
+  // partial having filled (tp1Hit) is proof the trade reached TP1.
+  const runner = (over: Partial<ExitPos> = {}) =>
+    pos({
+      entryPrice: 100, stopLoss: 99, plannedStopDistance: 1,
+      takeProfit1: 101.5, takeProfit2: 103,
+      tp1Hit: true, highestPrice: 103, setupType: 'MEAN_REVERSION',
+      ...over
+    });
+  const ctx = (price: number) => ({
+    price, now: NOW, atr5: 1, params: DEFAULT_INTRADAY_PARAMS,
+    portfolio: { dailyDrawdownPercent: 0, weeklyDrawdownPercent: 0 }
+  });
+
+  it('price back BELOW TP1 but through the trail → TRAILING_STOP fires', () => {
+    // peak 103, trail = 103 − min(1.8×1, 1.0×1) = 102. Price 101 is < TP1 (101.5).
+    const d = evaluateIntradayExit(runner(), ctx(101));
+    expect(d.reasonCode).toBe('TRAILING_STOP');
+    expect(d.trailingStopPrice).toBeCloseTo(102, 6);
+  });
+
+  it('price still above the trail (and below TP1) → keeps running, no exit', () => {
+    const d = evaluateIntradayExit(runner(), ctx(102.4));
+    expect(d.shouldExit).toBe(false);
+  });
+
+  it('a runner that never took the partial and never printed the MFE is NOT trailed', () => {
+    const d = evaluateIntradayExit(runner({ tp1Hit: false, highestPrice: 100.5 }), ctx(101));
+    expect(d.reasonCode).not.toBe('TRAILING_STOP');
+  });
+});
+
 describe('#5 — the early time-stop skips a trade that once printed a real MFE', () => {
   // 54 min = 45% of the 120-min budget → at the DEFAULT checkpoint.
   it('genuinely stagnant (progress 0.1R, MFE 0.1R) is still cut', () => {

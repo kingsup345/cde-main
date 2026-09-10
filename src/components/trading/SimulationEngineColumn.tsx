@@ -49,6 +49,9 @@ export interface EngineColumnProps {
   equity: number;
   trades: SimTrade[];
   history: SimPoint[];
+  /** Hourly-resolution history for the 1D/7D/30D range views — `history` alone
+   *  only spans ~48 min. */
+  hourlyHistory?: SimPoint[];
   pending: PendingOrder[];
   totalFees: number;
   totalSlippageCost: number;
@@ -76,7 +79,7 @@ export interface EngineColumnProps {
 // so both can be configured and watched independently for comparison.
 export default function SimulationEngineColumn({
   title, subtitle, accentClass, cryptoData,
-  cash, positions, positionsValue, equity, trades, history, pending,
+  cash, positions, positionsValue, equity, trades, history, hourlyHistory = [], pending,
   totalFees, totalSlippageCost, totalFunding = 0, winRate, totalTrades, closedTrades,
   evaluations, hasSavedSession, nextTickAt, config: botConfig, setConfig: setBotConfig,
   status, isRunning, start, pause, resetAll, confidenceKind = 'score'
@@ -556,6 +559,7 @@ export default function SimulationEngineColumn({
           cash={cash}
           positionsValue={positionsValue}
           history={history}
+          hourlyHistory={hourlyHistory}
           trades={trades}
           statusLabel={status === 'running' ? 'פעיל' : status === 'paused' ? 'מושהה' : 'מושבת'}
           statusTone={status}

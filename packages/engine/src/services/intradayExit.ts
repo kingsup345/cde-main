@@ -162,13 +162,20 @@ export function evaluateIntradayExit(pos: IntradayPositionView, ctx: IntradayExi
   }
 
   // 4 ── Trailing — only after the trade proved itself (§32) ─────────────────
-  // Trailing stop only activates after the position has reached at least the
-  // first take-profit level (3%) — prevents exiting before meaningful profit.
-  const tp1Level = pos.takeProfit1 ?? (isLong ? pos.entryPrice * 1.03 : pos.entryPrice * 0.97);
-  const reachedTp1 = isLong ? price >= tp1Level : price <= tp1Level;
+  // "Reached TP1" here means the trade PROVED it got there — NOT that the live
+  // price is above TP1 on this tick. `tp1Hit` is set the moment the partial
+  // fills; `mfeR >= tp1RewardRisk` covers a runner that touched TP1 between
+  // ticks without the flag. The old gate (`price >= takeProfit1`, live) silently
+  // DISABLED the trailing stop the instant a runner pulled back through TP1 —
+  // exactly when the trail exists to protect it. Observed on the worker: an ENA
+  // MEAN_REVERSION runner peaked at +2.0R, fell back below TP1, then drifted
+  // down with only the hard SL because `trailingActive` had flipped to false at
+  // the TP1 level. This only ever ADDS protection (exits a fading runner
+  // sooner), so it is safe for the live bot.
+  const provedTp1 = !!pos.tp1Hit || mfeR >= (params.tp1RewardRisk ?? 1.5);
   const trailingActive = pos.type === 'FUTURES'
-    ? !!pos.tp1Hit && reachedTp1
-    : reachedTp1 && mfeR >= (params.trailingActivationRBySetup[setupForParams] ?? params.trailingActivationR);
+    ? provedTp1
+    : provedTp1 && mfeR >= (params.trailingActivationRBySetup[setupForParams] ?? params.trailingActivationR);
   if (trailingActive) {
     const anchor = pos.type === 'FUTURES'
       ? isLong

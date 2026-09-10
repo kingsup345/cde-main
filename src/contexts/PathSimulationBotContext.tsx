@@ -39,6 +39,9 @@ export interface PathSimulationBotContextValue {
   equity: number;
   trades: SimTrade[];
   history: SimPoint[];
+  /** Hourly-resolution portfolio history (up to 30 days). `history` alone only
+   *  spans ~48 min, so the 1D/7D/30D range views need this. */
+  hourlyHistory: SimPoint[];
   pending: PendingOrder[];
   totalFees: number;
   totalSlippageCost: number;
@@ -221,6 +224,7 @@ export function PathSimulationBotProvider({ children }: { children: ReactNode })
     equity: source.equity ?? 10000,
     trades: (source.trades ?? []) as SimTrade[],
     history: (source.history ?? []) as SimPoint[],
+    hourlyHistory: ((source as { hourlyHistory?: SimPoint[] }).hourlyHistory ?? []) as SimPoint[],
     pending: (source.pending ?? []) as PendingOrder[],
     totalFees: source.totalFees ?? 0,
     totalSlippageCost: source.totalSlippageCost ?? 0,

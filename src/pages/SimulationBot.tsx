@@ -361,6 +361,7 @@ const SimulationBotPage = () => {
             equity={intraday.equity}
             trades={intraday.trades}
             history={intraday.history}
+            hourlyHistory={intraday.hourlyHistory}
             pending={intraday.pending}
             totalFees={intraday.totalFees}
             totalSlippageCost={intraday.totalSlippageCost}
@@ -391,6 +392,7 @@ const SimulationBotPage = () => {
             equity={pro.equity}
             trades={pro.trades}
             history={pro.history}
+            hourlyHistory={pro.hourlyHistory}
             pending={pro.pending}
             totalFees={pro.totalFees}
             totalSlippageCost={pro.totalSlippageCost}
@@ -421,6 +423,7 @@ const SimulationBotPage = () => {
             equity={path.equity}
             trades={path.trades}
             history={path.history}
+            hourlyHistory={path.hourlyHistory}
             pending={path.pending}
             totalFees={path.totalFees}
             totalSlippageCost={path.totalSlippageCost}
@@ -451,6 +454,7 @@ const SimulationBotPage = () => {
             equity={bybit.equity}
             trades={bybit.trades}
             history={bybit.history}
+            hourlyHistory={bybit.hourlyHistory}
             pending={bybit.pending}
             totalFees={bybit.totalFees}
             totalSlippageCost={bybit.totalSlippageCost}

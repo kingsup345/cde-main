@@ -44,6 +44,9 @@ export interface ProSimulationBotContextValue {
   equity: number;
   trades: SimTrade[];
   history: SimPoint[];
+  /** Hourly-resolution portfolio history (up to 30 days). `history` alone only
+   *  spans ~48 min, so the 1D/7D/30D range views need this. */
+  hourlyHistory: SimPoint[];
   pending: PendingOrder[];
   totalFees: number;
   totalSlippageCost: number;
@@ -230,6 +233,7 @@ export function ProSimulationBotProvider({ children }: { children: ReactNode }) 
     equity: activeSource.equity ?? 10000,
     trades: (activeSource.trades ?? []) as SimTrade[],
     history: (activeSource.history ?? []) as SimPoint[],
+    hourlyHistory: ((activeSource as { hourlyHistory?: SimPoint[] }).hourlyHistory ?? []) as SimPoint[],
     pending: (activeSource.pending ?? []) as PendingOrder[],
     totalFees: activeSource.totalFees ?? 0,
     totalSlippageCost: activeSource.totalSlippageCost ?? 0,

@@ -105,6 +105,14 @@ to time-stop out flat." MEAN_REVERSION פטור לגמרי (`minTp1Distance = 0`
 לחישוב ה-SL (הענף המבני); `targetReference` נכנס לחישוב ה-TP1. שניהם גם
 בטלמטריה. `validateLevelDirection` תופס סטופ/TP בצד הלא נכון.
 
+**Trailing runner (`intradayExit.ts` §4, תוקן 2026-09-11):** אחרי TP1, 50% רצים
+עם סטופ נגרר `anchor ∓ min(trailingAtrMult·atr5, trailingMaxRMult·|entry−SL|)`.
+תנאי ההפעלה הוא **"העסקה הוכיחה TP1"** = `tp1Hit || mfeR ≥ tp1RewardRisk` — **לא**
+"המחיר החי ≥ TP1". קודם השער נבדק מול המחיר החי, כך שרץ שנסוג מתחת ל-TP1 **כיבה
+את ה-trailing** בדיוק ברגע שהוא נחוץ (נצפה ב-worker: רץ ENA MEAN_REVERSION ב-+2.0R
+נסוג מתחת ל-TP1 והמשיך לרדת עם ה-SL הקשיח בלבד). התיקון רק **מוסיף** יציאה
+מוקדמת של רץ דועך → בטוח גם לבוט האמיתי.
+
 **שער `RISK_VS_COST`** (`evaluateCostEdge`): נדחה כש-`riskPercent <
 minStopCostMultiple × totalCostPercent` — סטופ צר מכדי לשרוד את סבב
 העמלות+slippage שלו, מקרה ש-`netRewardRisk` (שמחלק ב-risk) עיוור אליו.

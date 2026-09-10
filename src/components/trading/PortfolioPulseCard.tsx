@@ -31,7 +31,12 @@ interface Props {
   invested: number;
   cash: number;
   positionsValue: number;
+  /** Minute-resolution buffer — only ~48 min of ticks (720 points). */
   history: HistoryPoint[];
+  /** Hourly-resolution history, up to 30 days. Required for the 1D/7D/30D views
+   *  to anchor on the right point; without it every range collapsed to the
+   *  ~48-min `history` window and "יומי" was really "last 48 minutes". */
+  hourlyHistory?: HistoryPoint[];
   metrics: Metric[];
   statusLabel: string;
   statusTone: 'running' | 'paused' | 'idle';
@@ -59,22 +64,34 @@ const PortfolioPulseCard = ({
   cash,
   positionsValue,
   history,
+  hourlyHistory = [],
   metrics,
   statusLabel,
   statusTone,
 }: Props) => {
   const [range, setRange] = useState<TimeRange>('1D');
 
+  // One timeline: hourly points (span days) + the minute buffer (recent ~48
+  // min), sorted by `at`, de-duped. `history` alone never reaches back more
+  // than ~48 min, so without the hourly points every range button showed the
+  // same 48-minute window and "יומי" was a 48-minute figure wearing a daily
+  // label.
+  const mergedHistory = useMemo(() => {
+    const byAt = new Map<number, HistoryPoint>();
+    for (const h of hourlyHistory) if ((h.at ?? 0) > 0) byAt.set(h.at as number, h);
+    for (const h of history) if ((h.at ?? 0) > 0) byAt.set(h.at as number, h); // minute point wins a tie
+    return [...byAt.values()].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  }, [history, hourlyHistory]);
+
   const filteredHistory = useMemo(() => {
     const cutoff = Date.now() - RANGE_MS[range];
-    const withTime = history
-      .filter((h) => (h.at ?? 0) > 0)
-      .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
-    const inRange = withTime.filter((h) => (h.at ?? 0) >= cutoff);
+    const inRange = mergedHistory.filter((h) => (h.at ?? 0) >= cutoff);
+    // Run younger than the window → anchor on the earliest point we have (≈ run
+    // start), so a 2-hour-old run's "יומי" reads from ~$10,000, matching P&L.
     if (inRange.length >= 2) return inRange;
-    if (withTime.length >= 2) return withTime.slice(-120);
+    if (mergedHistory.length >= 2) return mergedHistory;
     return history;
-  }, [history, range]);
+  }, [mergedHistory, history, range]);
 
   const rangeStats = useMemo(() => {
     if (filteredHistory.length < 2) return null;
