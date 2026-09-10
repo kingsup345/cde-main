@@ -4,8 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   ResponsiveContainer,
   ComposedChart,
-  Area,
-  Line,
+  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -18,12 +17,32 @@ import { formatFullPrice } from '@/utils/formatPrice';
 import { fetchTimeframe, getAggregatedCandles } from '@cde/engine/market-data';
 
 const FIVE_MIN_MS = 300_000;
-/** Bars of pre-entry context to show on the 5-minute chart. */
-const CONTEXT_BARS = 24;
-/** Hard cap on how many 5m bars to pull for a long-held position (~20h). */
+const DAY_MS = 86_400_000;
+/** 5-minute bars of context to keep BEFORE the entry — the entry candle is the
+ *  anchor, this is the run-up the engine saw when it decided to buy. */
+const CONTEXT_BARS_BEFORE = 14;
+/** Most 5m candles to draw. ~10h — covers every intraday / Path hold with room;
+ *  a longer position keeps the most recent window, entry markers clamp to edge. */
+const RENDER_CAP = 120;
+/** Hard cap on how many 5m bars to PULL from the feed (~20h). */
 const MAX_5M_BARS = 240;
 
+const UP = '#10b981';
+const DOWN = '#f43f5e';
+const ENTRY_HL = '#fbbf24';
+
 type Candle = { timestamp: number; open: number; high: number; low: number; close: number };
+type Row = {
+  ts: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  /** [low, high] — the value recharts scales the bar by; the shape reads O/C off payload. */
+  ohlc: [number, number];
+  isEntry: boolean;
+  forming?: boolean;
+};
 
 export interface LivePositionChartProps {
   symbol: string;
@@ -50,6 +69,44 @@ const fmtClock = (ts: number) =>
   new Date(ts).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
 const fmtDay = (ts: number) =>
   new Date(ts).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit' });
+
+/** One candlestick. recharts hands the shape the pixel box the bar occupies
+ *  (x/width across, y/height spanning low→high because the bar's value is
+ *  [low, high]); we interpolate the body from open/close on the payload. */
+const CandleBar: React.FC<{
+  x?: number; y?: number; width?: number; height?: number;
+  payload?: Row;
+}> = ({ x = 0, y = 0, width = 0, height = 0, payload }) => {
+  if (!payload) return null;
+  const { open, close, high, low, isEntry, forming } = payload;
+  const cx = x + width / 2;
+  const span = high - low;
+  const priceToY = (p: number) => (span > 0 ? y + ((high - p) / span) * height : y + height / 2);
+
+  const isUp = close >= open;
+  const color = isUp ? UP : DOWN;
+  const bodyTop = priceToY(Math.max(open, close));
+  const bodyH = Math.max(1, priceToY(Math.min(open, close)) - bodyTop);
+  const bw = Math.max(2, Math.min(width * 0.68, 13));
+
+  return (
+    <g opacity={forming ? 0.7 : 1}>
+      {isEntry && (
+        <rect
+          x={cx - bw * 1.7} width={bw * 3.4} y={y - 5} height={height + 10} rx={2}
+          fill={ENTRY_HL} fillOpacity={0.13} stroke={ENTRY_HL} strokeOpacity={0.4} strokeWidth={1}
+        />
+      )}
+      <line x1={cx} x2={cx} y1={y} y2={y + height} stroke={color} strokeWidth={1} />
+      <rect
+        x={cx - bw / 2} width={bw} y={bodyTop} height={bodyH} rx={0.5}
+        fill={color}
+        stroke={isEntry ? ENTRY_HL : color}
+        strokeWidth={isEntry ? 1.5 : 0}
+      />
+    </g>
+  );
+};
 
 export const LivePositionChart: React.FC<LivePositionChartProps> = ({
   symbol,
@@ -112,10 +169,10 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
     const load = () => {
       if (!hasDataRef.current) setLoadingCandles(true);
       const bars = openTimestamp ? Math.ceil((Date.now() - openTimestamp) / FIVE_MIN_MS) : 0;
-      const limit = Math.min(MAX_5M_BARS, Math.max(36, bars + CONTEXT_BARS));
+      const limit = Math.min(MAX_5M_BARS, Math.max(48, bars + CONTEXT_BARS_BEFORE + 6));
 
       const daily = () =>
-        getAggregatedCandles(symbol, 30).then((c) => {
+        getAggregatedCandles(symbol, 45).then((c) => {
           if (active && c && c.length) {
             setInternalCandles(c);
             setUsingDaily(true);
@@ -124,9 +181,9 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
         });
 
       // minCandles: 12 — this chart wants a short window (an hour of 5m bars is
-      // plenty to draw the line). Without the override fetchTimeframe enforces
-      // the engine's floor of 500 and rejects every request this component ever
-      // makes, so it always fell through to the daily aggregate ("5ד׳ לא זמין").
+      // plenty to draw). Without the override fetchTimeframe enforces the
+      // engine's floor of 500 and rejects every request this component makes,
+      // so it always fell through to the daily aggregate ("5ד׳ לא זמין").
       fetchTimeframe(symbol, '5m', { limit, minCandles: 12, requireClosed: false, category: 'spot' })
         .then((res) => {
           if (!active) return;
@@ -156,50 +213,80 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
 
   const activeCandles = externalCandles && externalCandles.length > 0 ? externalCandles : internalCandles;
   const entryTs = openTimestamp || activeCandles[0]?.timestamp || Date.now();
+  const tfMs = usingDaily ? DAY_MS : FIVE_MIN_MS;
 
-  // ── Build split chart data: grey line before the BUY, coloured area after ───
-  const chartData = React.useMemo(() => {
-    if (!activeCandles || activeCandles.length === 0) return [];
+  // ── Build the candlestick window, anchored on the entry candle ─────────────
+  const { chartData, entryCandleTs } = React.useMemo(() => {
+    if (!activeCandles || activeCandles.length === 0) {
+      return { chartData: [] as Row[], entryCandleTs: entryTs };
+    }
+    const sorted = [...activeCandles].sort((a, b) => a.timestamp - b.timestamp);
 
-    const rows = usingDaily
-      ? activeCandles.slice(-CONTEXT_BARS)
-      : activeCandles.filter((c) => c.timestamp >= entryTs - CONTEXT_BARS * FIVE_MIN_MS).slice(-MAX_5M_BARS);
+    // The candle that CONTAINS the entry = last one opening at or before entryTs.
+    let eIdx = -1;
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i].timestamp <= entryTs) eIdx = i;
+      else break;
+    }
+    const anchor = eIdx === -1 ? 0 : eIdx;
+    let rows = sorted.slice(Math.max(0, anchor - CONTEXT_BARS_BEFORE));
+    if (rows.length > RENDER_CAP) rows = rows.slice(-RENDER_CAP);
 
-    // Index of the candle that CONTAINS the entry (last one that opened at or
-    // before entryTs). Split there and let that one candle belong to BOTH
-    // series so the grey "before" line and the coloured "since entry" area meet
-    // with no gap. splitIdx = -1 → entry precedes the whole window (all
-    // "since entry", no grey); = last → entry is newer than every bar loaded.
-    const firstAfter = rows.findIndex((c) => c.timestamp > entryTs);
-    const splitIdx = firstAfter === -1 ? rows.length - 1 : firstAfter - 1;
+    const eTsRaw = eIdx >= 0 ? sorted[eIdx].timestamp : (rows[0]?.timestamp ?? entryTs);
+    // If the position is old enough that the true entry candle fell outside the
+    // RENDER_CAP window, pin the entry markers to the left edge instead of
+    // letting them vanish — "the buy was before this view".
+    const eTs = rows.some((c) => c.timestamp === eTsRaw) ? eTsRaw : (rows[0]?.timestamp ?? eTsRaw);
 
-    const out = rows.map((c, i) => ({
+    const out: Row[] = rows.map((c) => ({
       ts: c.timestamp,
-      price: c.close,
-      priceBefore: i <= splitIdx ? c.close : null,
-      priceAfter: i >= splitIdx ? c.close : null
+      open: c.open, high: c.high, low: c.low, close: c.close,
+      ohlc: [c.low, c.high],
+      isEntry: c.timestamp === eTsRaw
     }));
 
-    // Pin the latest live market price as the final "since entry" point.
-    if (currentPrice > 0 && out.length > 0) {
-      const now = Date.now();
+    // Fold the live market price into the forming candle so the last bar tracks
+    // the position in real time.
+    if (currentPrice > 0 && out.length) {
       const last = out[out.length - 1];
-      if (now - last.ts > FIVE_MIN_MS / 2) {
-        out.push({ ts: now, price: currentPrice, priceBefore: null, priceAfter: currentPrice });
+      if (Date.now() - last.ts >= tfMs) {
+        const o = last.close;
+        const hi = Math.max(o, currentPrice);
+        const lo = Math.min(o, currentPrice);
+        out.push({ ts: last.ts + tfMs, open: o, high: hi, low: lo, close: currentPrice, ohlc: [lo, hi], isEntry: false, forming: true });
       } else {
-        last.price = currentPrice;
-        if (last.priceAfter !== null) last.priceAfter = currentPrice;
+        last.close = currentPrice;
+        last.high = Math.max(last.high, currentPrice);
+        last.low = Math.min(last.low, currentPrice);
+        last.ohlc = [last.low, last.high];
+        last.forming = true;
       }
     }
 
-    return out;
-  }, [activeCandles, usingDaily, entryTs, currentPrice]);
+    return { chartData: out, entryCandleTs: eTs };
+  }, [activeCandles, entryTs, currentPrice, tfMs]);
 
-  const xDomain: [number | string, number | string] = chartData.length
-    ? [Math.min(chartData[0].ts, entryTs), chartData[chartData.length - 1].ts]
-    : ['dataMin', 'dataMax'];
   const lastTs = chartData.length ? chartData[chartData.length - 1].ts : entryTs;
-  const tickFmt = usingDaily ? fmtDay : fmtClock;
+  // A category axis can hand the formatter a stringified ts — coerce before Date().
+  const tickFmt = (v: number | string) => (usingDaily ? fmtDay : fmtClock)(Number(v));
+
+  // Y domain: the candle band, plus entry/SL/TP/BE — but SL/TP only pull the
+  // scale up to ~1.2× the candle range so the candles never get squashed flat.
+  const yDomain = React.useMemo<[number, number] | ['auto', 'auto']>(() => {
+    if (!chartData.length) return ['auto', 'auto'];
+    let cLo = Infinity, cHi = -Infinity;
+    for (const d of chartData) { cLo = Math.min(cLo, d.low); cHi = Math.max(cHi, d.high); }
+    if (!Number.isFinite(cLo) || !Number.isFinite(cHi)) return ['auto', 'auto'];
+    const range = Math.max(cHi - cLo, cHi * 1e-4);
+    let lo = cLo, hi = cHi;
+    for (const v of [entryPrice, currentPrice, stopLoss, effectiveTP, breakEvenPrice]) {
+      if (typeof v === 'number' && v > 0) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    }
+    lo = Math.max(lo, cLo - range * 1.2);
+    hi = Math.min(hi, cHi + range * 1.2);
+    const pad = (hi - lo) * 0.06 || hi * 0.01;
+    return [lo - pad, hi + pad];
+  }, [chartData, entryPrice, currentPrice, stopLoss, effectiveTP, breakEvenPrice]);
 
   // Distance to targets — used by the fallback bar when no candles loaded.
   const slDistancePercent = stopLoss && entryPrice > 0
@@ -238,6 +325,25 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
           </text>
         </g>
       </g>
+    );
+  };
+
+  const renderTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: Row }> }) => {
+    if (!active || !payload || !payload.length) return null;
+    const r = payload[0].payload;
+    const up = r.close >= r.open;
+    return (
+      <div style={{ backgroundColor: 'rgba(15,23,42,0.96)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, fontSize: 11, padding: '6px 8px', fontFamily: 'monospace' }}>
+        <div style={{ color: '#94a3b8', marginBottom: 2 }}>
+          {usingDaily ? fmtDay(r.ts) : `${fmtDay(r.ts)} ${fmtClock(r.ts)}`}
+          {r.isEntry && <span style={{ color: ENTRY_HL }}> · כניסה</span>}
+          {r.forming && <span style={{ color: '#94a3b8' }}> · נר פעיל</span>}
+        </div>
+        <div style={{ color: up ? UP : DOWN }}>
+          O {formatFullPrice(r.open)}　H {formatFullPrice(r.high)}<br />
+          L {formatFullPrice(r.low)}　C {formatFullPrice(r.close)}
+        </div>
+      </div>
     );
   };
 
@@ -313,10 +419,10 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
         {loadingCandles && chartData.length === 0 ? (
           <div className="h-36 w-full flex flex-col items-center justify-center gap-2 bg-black/20 rounded-md border border-border/20">
             <Loader2 className="w-5 h-5 text-primary animate-spin" />
-            <span className="text-xs font-mono text-muted-foreground">טוען גרף 5 דקות...</span>
+            <span className="text-xs font-mono text-muted-foreground">טוען נרות 5 דקות...</span>
           </div>
         ) : chartData.length > 2 ? (
-          <div className="relative h-36 w-full">
+          <div className="relative h-40 w-full">
             {hasConfidence && (
               <div className="lpc-holo">
                 <div className="lpc-holo__k">ביטחון כניסה</div>
@@ -324,52 +430,39 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
               </div>
             )}
             <div className="absolute top-1.5 right-2 z-[5] text-[10px] font-mono text-muted-foreground/80 pointer-events-none">
-              {usingDaily ? 'נרות יומיים (5ד׳ לא זמין)' : 'נרות 5 דקות'}
+              {usingDaily ? 'נרות יומיים (5ד׳ לא זמין)' : 'נרות 5 דקות · פוקוס על הכניסה'}
             </div>
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData} margin={{ top: 20, right: 12, left: -18, bottom: 0 }}>
-                <defs>
-                  <linearGradient id={`grad-${symbol}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={moveColor} stopOpacity={0.4} />
-                    <stop offset="95%" stopColor={moveColor} stopOpacity={0.0} />
-                  </linearGradient>
-                </defs>
+              <ComposedChart data={chartData} margin={{ top: 20, right: 12, left: -18, bottom: 0 }} barCategoryGap="18%">
                 <XAxis
                   dataKey="ts"
-                  type="number"
-                  scale="time"
-                  domain={xDomain}
+                  type="category"
                   stroke="#71717a"
                   fontSize={10}
                   tickLine={false}
                   tickFormatter={tickFmt}
-                  minTickGap={40}
+                  minTickGap={44}
+                  interval="preserveStartEnd"
                 />
-                <YAxis stroke="#71717a" fontSize={10} domain={['auto', 'auto']} tickLine={false} width={58}
-                  tickFormatter={(v: number) => `$${formatFullPrice(v)}`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', fontSize: '11px' }}
-                  labelFormatter={(ts: number) => (usingDaily ? fmtDay(ts) : `${fmtDay(ts)} ${fmtClock(ts)}`)}
-                  formatter={(val: number | string) => [`$${formatFullPrice(Number(val))}`, 'מחיר']}
-                />
+                <YAxis stroke="#71717a" fontSize={10} domain={yDomain} tickLine={false} width={58}
+                  allowDecimals tickFormatter={(v: number) => `$${formatFullPrice(v)}`} />
+                <Tooltip content={renderTooltip} />
 
                 {/* Held period tint — the stretch of chart since the BUY */}
-                <ReferenceArea x1={entryTs} x2={lastTs} fill={moveColor} fillOpacity={0.06} />
+                <ReferenceArea x1={entryCandleTs} x2={lastTs} fill={moveColor} fillOpacity={0.06} />
 
-                {/* Price before entry — muted */}
-                <Line type="monotone" dataKey="priceBefore" stroke="#64748b" strokeWidth={1.5} dot={false} connectNulls={false} isAnimationActive={false} />
-                {/* Price since entry — coloured by the move, filled */}
-                <Area type="monotone" dataKey="priceAfter" stroke={moveColor} strokeWidth={2.4} fill={`url(#grad-${symbol})`} connectNulls={false} isAnimationActive={false} />
+                {/* The candlesticks */}
+                <Bar dataKey="ohlc" shape={(p: object) => <CandleBar {...(p as React.ComponentProps<typeof CandleBar>)} />} isAnimationActive={false} maxBarSize={16} />
 
                 {/* Exact entry time */}
-                <ReferenceLine x={entryTs} stroke={isLong ? '#10b981' : '#f43f5e'} strokeDasharray="3 3" strokeOpacity={0.7} />
+                <ReferenceLine x={entryCandleTs} stroke={ENTRY_HL} strokeDasharray="3 3" strokeOpacity={0.85} />
                 {/* Entry price level */}
                 <ReferenceLine y={entryPrice} stroke={isLong ? '#10b981' : '#f43f5e'} strokeDasharray="4 4" strokeWidth={1.25}
                   label={{ value: 'כניסה', fill: isLong ? '#34d399' : '#fb7185', fontSize: 9, position: 'insideLeft' }} />
 
                 {/* The BUY marker — precise x (entry candle) + y (entry price) */}
                 <ReferenceDot
-                  x={entryTs}
+                  x={entryCandleTs}
                   y={entryPrice}
                   r={5}
                   fill={isLong ? '#10b981' : '#f43f5e'}
