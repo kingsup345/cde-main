@@ -402,9 +402,18 @@ SCALE_3 רק מעל **+1.5R** + Supertrend עדיין בכיוון (הועבר �
 | Drawdown יומי | 8% | `intradayParams.ts` → `DAILY_DRAWDOWN_BLOCK_PERCENT` |
 | Drawdown שבועי | 15% | `intradayParams.ts` → `WEEKLY_DRAWDOWN_LOCK_PERCENT` |
 | תקרת נכס בודד | 8% | `intradayParams.ts` → `PER_ASSET_EXPOSURE_CAP_PERCENT` |
-| מכפיל סיכון אדפטיבי | לפי streak הפסדים | `adaptiveRisk.ts` |
+| מכפיל סיכון אדפטיבי | לפי streak הפסדים (חסום `[0,1]` — רק מקטין) | `adaptiveRisk.ts` |
 | Fill/Fee/Slippage/Funding | מנוע אחד | `simExecution.ts` |
 | שער קורלציה | ρ ≥ 0.7 על 72 נרות H1, מקס' 3 | `correlation.ts` — Intraday · Path · Bybit (**לא** Pro) |
+| רצפת גודל בפחד (opt-in) | F&G 20–35 + MEAN_REVERSION BUY → מכפיל ≥ 0.9 | `simExecution.ts` — **Intraday בלבד** |
+
+### רצפת גודל בפחד שוק — `fearGreedSizeBoost` (2026-09-10, כבוי כברירת מחדל)
+כש-`fearGreedSizeBoost=true` ומדד הפחד ב-`[20,35]` ("פחד, לא קפיטולציה")
+וה-Intraday **כבר אישר** קניית `MEAN_REVERSION` — רצף הפסדים **לא** מקטין את
+הפוזיציה: `sizingMultiplier = max(streakMult, 0.9)`. הרצפה < 1, כך שזה רק מבטל
+de-risking — **לעולם לא חורג מ-10% מ-equity**. Pro/Path/Bybit: no-op (Pro אין לו
+throttle; Path/Bybit מיושרי-מגמה — פחד נלחם בתזה שלהם). `FEAR_BAND_LOW/HIGH`,
+`FEAR_BAND_SIZING_FLOOR` ב-`simExecution.ts`.
 
 ### שער הקורלציה — כשל-פתוח שתוקן (2026-09-10)
 `evaluateCorrelationGate` מחזיר `allowed: true, abstained: true` כשאין

@@ -19,11 +19,13 @@ import { fetchTimeframe, getAggregatedCandles } from '@cde/engine/market-data';
 const FIVE_MIN_MS = 300_000;
 const DAY_MS = 86_400_000;
 /** 5-minute bars of context to keep BEFORE the entry — the entry candle is the
- *  anchor, this is the run-up the engine saw when it decided to buy. */
-const CONTEXT_BARS_BEFORE = 14;
-/** Most 5m candles to draw. ~10h — covers every intraday / Path hold with room;
+ *  anchor, this is the run-up the engine saw when it decided to buy. Large
+ *  enough that a fresh position still fills the axis with candles instead of a
+ *  handful of sticks spaced far apart. */
+const CONTEXT_BARS_BEFORE = 46;
+/** Most 5m candles to draw. ~13h — covers every intraday / Path hold with room;
  *  a longer position keeps the most recent window, entry markers clamp to edge. */
-const RENDER_CAP = 120;
+const RENDER_CAP = 150;
 /** Hard cap on how many 5m bars to PULL from the feed (~20h). */
 const MAX_5M_BARS = 240;
 
@@ -87,7 +89,7 @@ const CandleBar: React.FC<{
   const color = isUp ? UP : DOWN;
   const bodyTop = priceToY(Math.max(open, close));
   const bodyH = Math.max(1, priceToY(Math.min(open, close)) - bodyTop);
-  const bw = Math.max(2, Math.min(width * 0.68, 13));
+  const bw = Math.max(2, Math.min(width * 0.72, 16));
 
   return (
     <g opacity={forming ? 0.7 : 1}>
@@ -169,7 +171,7 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
     const load = () => {
       if (!hasDataRef.current) setLoadingCandles(true);
       const bars = openTimestamp ? Math.ceil((Date.now() - openTimestamp) / FIVE_MIN_MS) : 0;
-      const limit = Math.min(MAX_5M_BARS, Math.max(48, bars + CONTEXT_BARS_BEFORE + 6));
+      const limit = Math.min(MAX_5M_BARS, Math.max(72, bars + CONTEXT_BARS_BEFORE + 8));
 
       const daily = () =>
         getAggregatedCandles(symbol, 45).then((c) => {
@@ -433,7 +435,7 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
               {usingDaily ? 'נרות יומיים (5ד׳ לא זמין)' : 'נרות 5 דקות · פוקוס על הכניסה'}
             </div>
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData} margin={{ top: 20, right: 12, left: -18, bottom: 0 }} barCategoryGap="18%">
+              <ComposedChart data={chartData} margin={{ top: 20, right: 12, left: -18, bottom: 0 }} barCategoryGap="8%">
                 <XAxis
                   dataKey="ts"
                   type="category"
@@ -452,7 +454,7 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
                 <ReferenceArea x1={entryCandleTs} x2={lastTs} fill={moveColor} fillOpacity={0.06} />
 
                 {/* The candlesticks */}
-                <Bar dataKey="ohlc" shape={(p: object) => <CandleBar {...(p as React.ComponentProps<typeof CandleBar>)} />} isAnimationActive={false} maxBarSize={16} />
+                <Bar dataKey="ohlc" shape={(p: object) => <CandleBar {...(p as React.ComponentProps<typeof CandleBar>)} />} isAnimationActive={false} maxBarSize={22} />
 
                 {/* Exact entry time */}
                 <ReferenceLine x={entryCandleTs} stroke={ENTRY_HL} strokeDasharray="3 3" strokeOpacity={0.85} />

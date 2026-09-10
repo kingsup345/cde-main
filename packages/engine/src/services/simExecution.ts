@@ -336,7 +336,24 @@ export interface SimBotConfig {
    *  Fill is Maker, no slippage. When false/absent → MARKET at the live price. */
   proLimitEntries?: boolean;
   positionPercent?: number;
+  /** Opt-in (default off). When the Fear & Greed index sits in the
+   *  "afraid, not capitulating" band [FEAR_BAND_LOW, FEAR_BAND_HIGH] and the
+   *  engine has ALREADY approved a MEAN_REVERSION buy, a recent losing streak is
+   *  not allowed to shrink that entry — the sizing multiplier is floored at
+   *  FEAR_BAND_SIZING_FLOOR so it sizes back toward the full 10% target. Never
+   *  raises size above the 10% invariant (the floor is < 1). Intraday only —
+   *  Pro/Path/Bybit do not carry a streak throttle for this to lift. */
+  fearGreedSizeBoost?: boolean;
 }
+
+/** "Afraid but not in free-fall" — the contrarian band. Below LOW is
+ *  capitulation (still falling, knife-catch territory); above HIGH is neutral. */
+export const FEAR_BAND_LOW = 20;
+export const FEAR_BAND_HIGH = 35;
+/** Floor the sizing multiplier is lifted to inside the fear band. < 1 on
+ *  purpose: it undoes most of a streak throttle without ever pushing past the
+ *  10%-of-equity target. */
+export const FEAR_BAND_SIZING_FLOOR = 0.9;
 
 const uid = (p: string) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -542,6 +559,11 @@ export interface OrderGenContext {
    *  when false/absent they fire as delayed MARKET fills with adverse slippage.
    *  Same semantics the Pro bot's `limitEntries` already has. */
   limitEntries?: boolean;
+  /** Current Fear & Greed index (0-100). Read only when `fearGreedSizeBoost` is
+   *  on; absent → the boost never engages. */
+  fearGreedIndex?: number;
+  /** SimBotConfig.fearGreedSizeBoost — see that field. */
+  fearGreedSizeBoost?: boolean;
   /** Symbol (as stored on the position/order) → last-loss timestamp. Read-only here. */
   exitCooldown: Record<string, number>;
   priceFor: (symbol: string) => number | undefined;
@@ -817,9 +839,27 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
     // [0,1] — it only ever de-risks). Evaluations built outside the engine
     // (tests / legacy paths) carry no multiplier → 1.
     const rawRisk = (ev.decision as { risk?: { sizingMultiplier?: number } | null } | null | undefined)?.risk;
-    const riskMult = typeof rawRisk?.sizingMultiplier === 'number' && Number.isFinite(rawRisk.sizingMultiplier)
+    const streakMult = typeof rawRisk?.sizingMultiplier === 'number' && Number.isFinite(rawRisk.sizingMultiplier)
       ? Math.max(0, Math.min(1, rawRisk.sizingMultiplier))
       : 1;
+
+    // Fear-band conviction (opt-in). The index is "afraid, not capitulating",
+    // the engine already approved this as a MEAN_REVERSION buy, and a losing
+    // streak had throttled the size — lift the multiplier back toward full so
+    // the confirmed dip is taken at conviction size. Floor is < 1, so this
+    // never breaches the 10%-of-equity target; it only undoes de-risking.
+    const inFearBand =
+      ctx.fearGreedSizeBoost === true &&
+      typeof ctx.fearGreedIndex === 'number' &&
+      ctx.fearGreedIndex >= FEAR_BAND_LOW &&
+      ctx.fearGreedIndex <= FEAR_BAND_HIGH &&
+      orderSide === 'buy' &&
+      ev.decision?.setupType === 'MEAN_REVERSION';
+    const riskMult = inFearBand ? Math.max(streakMult, FEAR_BAND_SIZING_FLOOR) : streakMult;
+    if (inFearBand && riskMult > streakMult) {
+      console.info(`[sim] ${ev.symbol}: F&G ${ctx.fearGreedIndex} בטווח פחד + MEAN_REVERSION BUY — רצפת גודל ${FEAR_BAND_SIZING_FLOOR} (streak היה ${streakMult.toFixed(2)})`);
+    }
+
     const rawBudget = resolveEntryBudget({
       kellyBetSizeUsd: ev.betSizeUsd,
       equity: ctx.equity,

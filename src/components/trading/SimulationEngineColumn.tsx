@@ -474,6 +474,19 @@ export default function SimulationEngineColumn({
                   לא מסומן: כניסת MARKET מיידית במחיר החי. חל על כל 4 הבוטים.
                 </label>
               </div>
+              <div className="flex items-center gap-3 pt-3">
+                <input
+                  id={`${title}-fear-boost`}
+                  type="checkbox"
+                  checked={botConfig.fearGreedSizeBoost === true}
+                  onChange={(e) => setBotConfig({ ...botConfig, fearGreedSizeBoost: e.target.checked })}
+                />
+                <label htmlFor={`${title}-fear-boost`} className="text-sm text-muted-foreground cursor-pointer">
+                  הגברת גודל בפחד שוק (20–35) — כשמדד הפחד בטווח הזה והבוט כבר החליט על קניית
+                  MEAN_REVERSION, רצף הפסדים לא מקטין את הפוזיציה (חוזרת ל-~10% מ-equity, לא מעבר).
+                  משפיע רק על "מנוע חדש".
+                </label>
+              </div>
             </div>
           </DialogContent>
         </Dialog>

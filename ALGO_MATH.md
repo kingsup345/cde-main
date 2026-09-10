@@ -432,7 +432,21 @@ spot בלבד → 0 בפועל.
 
 ### מכפיל סיכון אדפטיבי (`adaptiveRisk.ts`)
 מכפיל את ה-`riskPercent` לפי streak הפסדים/רווחים אחרון — מקטין גודל אחרי
-רצף הפסדים, מחזיר בהדרגה אחרי רווח. משותף לכל 4 הבוטים.
+רצף הפסדים, מחזיר בהדרגה אחרי רווח. חסום ל-`[0,1]` — **רק מקטין**. משותף
+לכל 4 הבוטים (בפועל רק Intraday מיישם אותו; Pro/Path/Bybit לא נושאים throttle).
+
+### רצפת גודל בפחד שוק (`fearGreedSizeBoost`, opt-in, Intraday בלבד)
+```
+אם  fearGreedSizeBoost = true
+    AND  FEAR_BAND_LOW (20) ≤ fearGreedIndex ≤ FEAR_BAND_HIGH (35)
+    AND  orderSide = 'buy'  AND  setupType = 'MEAN_REVERSION'
+→   sizingMultiplier = max(streakMult, FEAR_BAND_SIZING_FLOOR (0.9))
+```
+"פחד אבל לא קפיטולציה" (מתחת ל-20 = נפילה חופשית, מעל 35 = ניטרלי). כשהמנוע
+**כבר אישר** קניית MEAN_REVERSION ורצף הפסדים כיווץ את הגודל — הרצפה מחזירה
+אותו לכיוון 10% המלאים. **הרצפה < 1**, כך שזה רק מבטל de-risking — לעולם לא
+דוחף מעל תקרת ה-10% מ-equity. כבוי כברירת מחדל. Pro/Path/Bybit: no-op
+(אין להם streak throttle להרים; Pro spot-BUY מבני, Path/Bybit מיושרי-מגמה).
 
 ### קבועים משותפים (מקור יחיד — `intradayParams.ts`)
 | נושא | ערך | קבוע |
@@ -443,6 +457,8 @@ spot בלבד → 0 בפועל.
 | תקרת הפסד לעסקה | 4.2% | `MAX_LOSS_PERCENT` |
 | רצפת הזמנה (סימולציה) | $100 | `MIN_SIM_ENTRY_USD` |
 | מרווח preemption | 5 נק' ביטחון | `SLOT_PREEMPT_MARGIN` |
+| טווח פחד (רצפת גודל) | 20–35 | `FEAR_BAND_LOW` / `FEAR_BAND_HIGH` |
+| רצפת מכפיל גודל בפחד | 0.9 | `FEAR_BAND_SIZING_FLOOR` |
 
 ---
 

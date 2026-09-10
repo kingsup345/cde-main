@@ -555,6 +555,8 @@ export function useSimulationBot({ config, isRunning, cryptoData, recommendation
       positionPercent: config.positionPercent,
       riskLevel: config.riskLevel,
       limitEntries: config.proLimitEntries === true,
+      fearGreedIndex,
+      fearGreedSizeBoost: config.fearGreedSizeBoost === true,
       exitCooldown: exitCooldownRef.current,
       priceFor: priceForRef.current,
       buildCandlesForSymbol,
@@ -578,7 +580,7 @@ export function useSimulationBot({ config, isRunning, cryptoData, recommendation
     }
     setLastEvaluation(new Date().toLocaleTimeString('he-IL'));
     setNextTickAt(Date.now() + 5000);
-  }, [isRunning, evaluations, heartbeat, dailyDrawdownPercent, weeklyDrawdownPercent, buildCandlesForSymbol, mtfData, config.executionDelaySec, config.maxPositions, config.maxFuturesPositions, config.positionPercent, config.riskLevel, config.proLimitEntries, config.initialAmount, closedTradeRecords, correlationCandles, equity]);
+  }, [isRunning, evaluations, heartbeat, dailyDrawdownPercent, weeklyDrawdownPercent, buildCandlesForSymbol, mtfData, config.executionDelaySec, config.maxPositions, config.maxFuturesPositions, config.positionPercent, config.riskLevel, config.proLimitEntries, config.fearGreedSizeBoost, config.initialAmount, closedTradeRecords, correlationCandles, equity, fearGreedIndex]);
 
   // Heartbeat — reset countdown timer when bot starts/stops.
   // Equity recording is handled exclusively by the background worker below to avoid duplicates.
