@@ -127,7 +127,7 @@ describe('selectFillableOrders — why resting at the market filled instantly', 
  * quietly flattered path and bybit against intraday and pro inside a framework
  * whose whole point is that differences come from decisions, not plumbing.
  */
-describe('the checkbox moves the resting price for path and bybit', () => {
+describe('the checkbox moves the resting price for path — but never for bybit', () => {
   const MARKET = 4.795;
   const LIMIT = 4.70;
 
@@ -183,20 +183,20 @@ describe('the checkbox moves the resting price for path and bybit', () => {
     candlesBySymbol: {}
   });
 
-  it('bybit: limit ON rests at the discounted level, OFF fires at market', () => {
-    const on = generateTrendBreakoutOrders({
-      ...common(bybitEval()), maxConcurrentTrades: 7, limitEntries: true
-    });
-    expect(on).toHaveLength(1);
-    expect(on[0].fill).toBe('limit');
-    expect(on[0].signalPrice).toBeCloseTo(LIMIT, 9);
-    expect(on[0].signalPrice).toBeLessThan(MARKET);
-
-    const off = generateTrendBreakoutOrders({
-      ...common(bybitEval()), maxConcurrentTrades: 7, limitEntries: false
-    });
-    expect(off[0].fill).toBe('market');
-    expect(off[0].signalPrice).toBeCloseTo(MARKET, 9);
+  // 2026-09-10: TrendBreakout no longer reads the checkbox. A resting limit
+  // BELOW market is adverse selection for a breakout — it fills only when the
+  // break is failing back through the level, while every breakout that runs
+  // never fills at all. Live that was 5 entries / 0 take-profits.
+  it('bybit: fires at MARKET whether the checkbox is on or off', () => {
+    for (const limitEntries of [true, false]) {
+      const orders = generateTrendBreakoutOrders({
+        ...common(bybitEval()), maxConcurrentTrades: 7, limitEntries
+      });
+      expect(orders).toHaveLength(1);
+      expect(orders[0].fill).toBe('market');
+      expect(orders[0].signalPrice).toBeCloseTo(MARKET, 9);
+      expect(orders[0].signalPrice).toBeGreaterThan(LIMIT);
+    }
   });
 
   it('path: limit ON rests at the discounted level, OFF fires at market', () => {
@@ -215,9 +215,9 @@ describe('the checkbox moves the resting price for path and bybit', () => {
     expect(off[0].signalPrice).toBeCloseTo(MARKET, 9);
   });
 
-  it('a limit order from either bot then genuinely waits at that price', () => {
-    const [order] = generateTrendBreakoutOrders({
-      ...common(bybitEval()), maxConcurrentTrades: 7, limitEntries: true
+  it('a path limit order then genuinely waits at that price', () => {
+    const [order] = generatePrev4hRangeOrders({
+      ...common(pathEval()), maxPositions: 7, maxFuturesPositions: 2, limitEntries: true
     });
     const ready = { ...order, executeAt: Date.now() - 1 };
     // Market unchanged at 4.795 — nothing fills.

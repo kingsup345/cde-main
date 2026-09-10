@@ -105,6 +105,8 @@ export {
   pearsonCorrelation,
   correlationBetween,
   evaluateCorrelationGate,
+  blocksOnAbstention,
+  abstentionBlockReason,
   resolveCorrelationLookback,
   CORRELATION_LOOKBACK_FLOOR
 } from './services/correlation';

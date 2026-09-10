@@ -56,7 +56,25 @@ weeklyDrawdownPercent ≥ 15%  → נעילה                (WEEKLY_DRAWDOWN_LO
 ```
 נמדד על ה-equity של כל בוט בנפרד. חוסם **פתיחה** בלבד — לא סוגר קיים.
 
-### 0.3 slot preemption (משותף, כל 4 הבוטים)
+### 0.3 שער הקורלציה (Intraday · Path · TrendBreakout)
+```
+ρ = Pearson על log-returns של 72 נרות H1 (רצפה 36, מתכווץ לפי atrPercentile)
+effective = (אותו כיוון) ? ρ : −ρ
+נחסם כאשר   |{מוחזקים עם effective ≥ 0.7}| ≥ DEFAULT_MAX_CORRELATED (3)
+```
+**כשאי-אפשר למדוד (2026-09-10):** `evaluateCorrelationGate` מחזיר
+`allowed: true, abstained: true` כשאין היסטוריית נרות חופפת. עד לתאריך הזה כל
+הקוראים קראו רק ב-`allowed` והתעלמו מ-`abstained` — כלומר "לא הצלחתי לבדוק"
+בוצע כ-"אלה בלתי-תלויים". הגרוע: השער נמנע הכי הרבה ב-**cold start**, בדיוק
+כשכל הסלוטים פנויים והגודל בתקרה. בפועל: intraday פתח 6 long בגודל מלא תוך 4
+דקות (60% מההון), כולם נסגרו יחד → -$102 מתוך ריצה של -$107.
+עכשיו `blocksOnAbstention` חוסם ערימה **לא-מאומתת** מעבר לאותו קאפ (3);
+הכניסות הראשונות עדיין עוברות, אחרת cold start היה נתקע לנצח.
+**`prev4hRangeExecution` לא היה בו שער קורלציה בכלל** עד 2026-09-10 (למרות
+הערה ב-TrendBreakout שטענה אחרת). `proSimExecution` עדיין ללא — הוא לא מקבץ
+כניסות בפועל.
+
+### 0.4 slot preemption (משותף, כל 4 הבוטים)
 פקודת entry שמחכה למחיר (limit נח, טרם מולאה) **אינה** תופסת סלוט באופן
 מוחלט: איתות טרי חזק יותר במטבע אחר **מפנה** אותה אם
 `confidence_חדש ≥ confidence_נח + SLOT_PREEMPT_MARGIN (5)`. לעולם לא מפנה
@@ -104,8 +122,7 @@ SL  = ההדוק מבין:  atr5 · maxStopAtrMult
 
 TP1 = הרחוק מבין:  |entry − SL| · tp1RewardRisk
                    |targetReference − entry|
-                   tp1FloorDistance = max(1.5%·entry, 1.5·|entry−SL|)
-      + רצפת FIXED_TP_PERCENT 3% לכל setup פרט ל-MEAN_REVERSION (היעד שם = VWAP)
+                   tp1FloorDistance = max(1.5%·entry, 1.5·|entry−SL|)   ← הרצפה, לכל setup פרט ל-MEAN_REVERSION (שם 0; היעד = VWAP)
 
 TP2 = TP1 · (tp2RewardRisk / tp1RewardRisk)      [SIM: tp2RewardRisk 2.5→2.2]
 ```
@@ -312,6 +329,14 @@ H1 ≥ 200 · M15 ≥ 300 · M5 ≥ 30. רק נרות **סגורים**.
 confidence = 25·[H1 Supertrend]  + 20·[H1 EMA]  + 25·[פריצת M15]  + 15·[אישור נפח]  + 15·[אישור M5]
 ```
 כל רכיב 0/חלקי/מלא. סף כניסה `MIN_CONFIDENCE = 70`.
+
+### מצב מילוי — MARKET בלבד (2026-09-10)
+TrendBreakout **לא קורא** ב-`proLimitEntries`. לימיט נח **מתחת** לשוק הוא בחירה
+שלילית לפריצה: הוא מתמלא רק כשהפריצה חוזרת דרך הרמה (כלומר נכשלת), וכל פריצה
+שרצה — בדיוק מה שהאסטרטגיה קיימת בשבילו — לא מתמלאת כלל. בפועל: 5 כניסות,
+**0 TP**, 3 יציאות היפוך מגמה. מנועי pullback/mean-reversion (Intraday, Pro)
+כן נחים מתחת לשוק בלגיטימיות; פריצת Donchian לא יכולה. `ENTRY_TOO_EXTENDED`
+(§5) הוא מה ששומר על הכניסה, לא מצב המילוי.
 
 ### מתמטיקת הגודל (§14–15)
 ```

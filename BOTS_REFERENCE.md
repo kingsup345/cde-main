@@ -92,11 +92,14 @@ SL  = ההדוק מבין: atr5 × maxStopAtrMult  |  |entry - (stopReference �
 TP1 = הרחוק מבין: SL × tp1RewardRisk  |  |targetReference - entry|  |  רצפת tp1FloorDistance
 TP2 = TP1 × (tp2RewardRisk / tp1RewardRisk)   [SIM: tp2RewardRisk 2.5→2.2, 2026-09-10]
 ```
-`FIXED_TP_PERCENT = 3.0` הוא הקבוע היחיד שנשאר — **רצפת** ה-TP1 לכל setup
-**חוץ מ-MEAN_REVERSION** (שהיעד שלו הוא ה-VWAP, מבנית מתחת ל-3% בדשדוש; רצפת
-3% דחפה את היעד מעבר לרמה שהעסקה קיימת כדי להגיע אליה). ענף ה-ATR עדיין שומר
-`grossRR ≥ tp1RewardRisk`. (`FIXED_SL_PERCENT` נמחק; הסטופ דינמי מאז `ecfd37b`.)
-ה-"3%" הוא טייק-פרופיט, לא תקרת הפסד — תקרת ההפסד היא `MAX_LOSS_PERCENT = 4.2%`.
+**רצפת ה-TP1 היא `tp1FloorDistance` = `max(1.5%·entry, 1.5·|entry−SL|)` — לא
+3% שטוח.** `FIXED_TP_PERCENT = 3.0` עדיין מוגדר ומיוצא (ובדיקות קוראות בו), אבל
+`buildRiskPlan` **לא משתמש בו** — ראה ההערה ב-`intradayRisk.ts:440`: "A 3%
+target is unreachable in-horizon on a low-volatility major, so those trades used
+to time-stop out flat." MEAN_REVERSION פטור לגמרי (`minTp1Distance = 0`; היעד
+שלו הוא ה-VWAP). ענף ה-ATR עדיין שומר `grossRR ≥ tp1RewardRisk`.
+(`FIXED_SL_PERCENT` נמחק; הסטופ דינמי מאז `ecfd37b`.) תקרת ההפסד היא
+`MAX_LOSS_PERCENT = 4.2%`.
 
 `RiskPlanInput.stopReference` / `targetReference` — `stopReference` **נכנס**
 לחישוב ה-SL (הענף המבני); `targetReference` נכנס לחישוב ה-TP1. שניהם גם
@@ -368,6 +371,12 @@ SCALE_3 רק מעל **+1.5R** + Supertrend עדיין בכיוון (הועבר �
 סטופ אפקטיבי נחצה · TP (2R) · היפוך H1 Supertrend נגד הפוזיציה · Time Stop
 אחרי 24 נרות H1. setup שהתבטל → חוסם scale-in נוסף, לא סוגר.
 
+### מצב מילוי — MARKET בלבד (2026-09-10)
+הבוט **לא קורא** ב-`proLimitEntries`. לימיט נח מתחת לשוק הוא בחירה שלילית
+לפריצה — מתמלא רק כשהפריצה נכשלת וחוזרת דרך הרמה, בעוד שכל פריצה שרצה לא
+מתמלאת בכלל. נמדד על ה-worker: 5 כניסות, **0 TP**, 3 יציאות "היפוך מגמה".
+`ENTRY_TOO_EXTENDED` (§5) הוא חסם ה-chase, לא מצב המילוי.
+
 ### SHORT
 בסימולציה אי-אפשר לשרטט ב-SPOT, לכן SHORT = `FUTURES` במינוף **1x**
 (מתנהג כמו ספוט הפוך; כל התקרות חלות). `SIM_BOTS.bybit.maxFuturesPositions = 3`
@@ -395,6 +404,17 @@ SCALE_3 רק מעל **+1.5R** + Supertrend עדיין בכיוון (הועבר �
 | תקרת נכס בודד | 8% | `intradayParams.ts` → `PER_ASSET_EXPOSURE_CAP_PERCENT` |
 | מכפיל סיכון אדפטיבי | לפי streak הפסדים | `adaptiveRisk.ts` |
 | Fill/Fee/Slippage/Funding | מנוע אחד | `simExecution.ts` |
+| שער קורלציה | ρ ≥ 0.7 על 72 נרות H1, מקס' 3 | `correlation.ts` — Intraday · Path · Bybit (**לא** Pro) |
+
+### שער הקורלציה — כשל-פתוח שתוקן (2026-09-10)
+`evaluateCorrelationGate` מחזיר `allowed: true, abstained: true` כשאין
+היסטוריית נרות לאימות. **כל הקוראים התעלמו מ-`abstained`**, כלומר "לא הצלחתי
+לבדוק" בוצע כ-"בלתי-תלויים" — והשער נמנע הכי הרבה ב-cold start, כשכל הסלוטים
+פנויים והגודל בתקרה. נמדד: intraday פתח **6 long בגודל מלא תוך 4 דקות** ($6,000
+= 60% מההון), כולם נסגרו יחד בדקות 16–36 → **-$102.22 מתוך ריצה של -$107.25**.
+`blocksOnAbstention` חוסם עכשיו ערימה לא-מאומתת מעבר ל-3; הראשונות עוברות,
+אחרת cold start ננעל לצמיתות (היסטוריה נצברת רק אחרי שיש פוזיציות).
+`prev4hRangeExecution` **לא היה בו שער כלל** עד לתאריך הזה — נוסף.
 
 כל אחד מהם **נמדד בנפרד** על ה-equity/positions/history של הבוט שלו בלבד
 (`server/simEngineFactory.ts`) — משותף הוא רק הסף, לא המדידה.
