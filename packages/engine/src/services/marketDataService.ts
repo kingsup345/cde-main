@@ -472,12 +472,22 @@ export interface FetchTimeframeResult {
 export async function fetchTimeframe(
   symbol: string,
   tf: TimeframeKey,
-  opts: { limit?: number; now?: number; endTime?: number; requireClosed?: boolean; category?: 'spot' | 'linear'; since?: number } = {}
+  opts: { limit?: number; now?: number; endTime?: number; requireClosed?: boolean; category?: 'spot' | 'linear'; since?: number; minCandles?: number } = {}
 ): Promise<FetchTimeframeResult> {
   const spec = TIMEFRAME_SPECS[tf];
   const limit = opts.limit ?? spec.targetCandles;
   const now = opts.now ?? Date.now();
   const requireClosed = opts.requireClosed !== false;
+  // `spec.minCandles` is the ENGINE's floor (500 for 5m — ~41h, enough for the
+  // intraday setup detector). A caller that only wants a short window — the
+  // position-card chart asks for 36-240 bars — passes `minCandles` to lower it,
+  // otherwise every small request fails validation and the caller wrongly
+  // concludes "5m unavailable" and falls back to daily. An explicit override is
+  // clamped to [1, limit] so it can never be unsatisfiable by construction;
+  // with no override the engine floor is used unchanged.
+  const minCandles = opts.minCandles !== undefined
+    ? Math.min(limit, Math.max(1, opts.minCandles))
+    : spec.minCandles;
   const issues: string[] = [];
 
   // ── Delta mode: fetch ONLY candles newer than `since` ───────────────────────
@@ -572,7 +582,7 @@ export async function fetchTimeframe(
       const closed = requireClosed ? dropFormingCandle(raw, spec.ms, now) : raw;
       receivedCount = raw.length;
       closedCount = closed.length;
-      const validation = validateCandles(closed, spec.minCandles);
+      const validation = validateCandles(closed, minCandles);
       issues.push(...validation.issues.map((i) => `${source}:${i}`));
       if (validation.ok) {
         return {
@@ -582,7 +592,7 @@ export async function fetchTimeframe(
           received: receivedCount,
           closed: closedCount,
           valid: validation.cleaned.length,
-          required: spec.minCandles
+          required: minCandles
         };
       }
       // Source returned data but below the minimum — record the real cause.
@@ -616,7 +626,7 @@ export async function fetchTimeframe(
     received: receivedCount,
     closed: closedCount,
     valid: 0,
-    required: spec.minCandles
+    required: minCandles
   };
 }
 

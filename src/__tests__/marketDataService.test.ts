@@ -213,6 +213,45 @@ describe('fetchTimeframe', () => {
     expect(r.reason).toBe('INSUFFICIENT_CANDLES');
     expect(r.received).toBe(50);
   });
+
+  it('minCandles override lets a short-window caller succeed below the engine floor', async () => {
+    // 40 closed candles — far below the 5m engine floor (500), but the
+    // position-card chart only wants a short window. Without the override this
+    // returns [] / INSUFFICIENT_CANDLES and the caller wrongly shows "5ד׳ לא זמין".
+    const fiveMs = TIMEFRAME_SPECS['5m'].ms;
+    const fiveEnd = Math.floor(now / fiveMs) * fiveMs - fiveMs;
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes('bybit.com')
+        ? makeResponse(bybitKlineBody(buildBybitRows(fiveEnd, fiveMs, 40)))
+        : makeResponse(buildBinanceRows(fiveEnd, fiveMs, 40))
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const withoutOverride = await fetchTimeframe('BTCUSDT', '5m', { now, limit: 40 });
+    expect(withoutOverride.candles.length).toBe(0);
+    expect(withoutOverride.reason).toBe('INSUFFICIENT_CANDLES');
+
+    const withOverride = await fetchTimeframe('BTCUSDT', '5m', { now, limit: 40, minCandles: 12 });
+    expect(withOverride.source).toBe('bybit');
+    expect(withOverride.candles.length).toBe(40);
+    expect(withOverride.required).toBe(12);
+  });
+
+  it('minCandles is clamped to the requested limit — never unsatisfiable by construction', async () => {
+    const fiveMs = TIMEFRAME_SPECS['5m'].ms;
+    const fiveEnd = Math.floor(now / fiveMs) * fiveMs - fiveMs;
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes('bybit.com')
+        ? makeResponse(bybitKlineBody(buildBybitRows(fiveEnd, fiveMs, 30)))
+        : makeResponse(buildBinanceRows(fiveEnd, fiveMs, 30))
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    // Asking for 30 but requiring 999 would be impossible; the clamp caps
+    // required at the limit so a full page still counts as complete.
+    const r = await fetchTimeframe('BTCUSDT', '5m', { now, limit: 30, minCandles: 999 });
+    expect(r.candles.length).toBe(30);
+    expect(r.required).toBe(30);
+  });
 });
 
 // ── Unit: getMultiTimeframeData telemetry ────────────────────────────────────

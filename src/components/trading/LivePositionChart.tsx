@@ -123,7 +123,11 @@ export const LivePositionChart: React.FC<LivePositionChartProps> = ({
           }
         });
 
-      fetchTimeframe(symbol, '5m', { limit, requireClosed: false, category: 'spot' })
+      // minCandles: 12 — this chart wants a short window (an hour of 5m bars is
+      // plenty to draw the line). Without the override fetchTimeframe enforces
+      // the engine's floor of 500 and rejects every request this component ever
+      // makes, so it always fell through to the daily aggregate ("5ד׳ לא זמין").
+      fetchTimeframe(symbol, '5m', { limit, minCandles: 12, requireClosed: false, category: 'spot' })
         .then((res) => {
           if (!active) return;
           if (res.candles && res.candles.length > 2) {
