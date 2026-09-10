@@ -286,6 +286,18 @@ export interface PendingOrder {
   confidence: number;
   executeAt: number;
   createdAt: number;
+  /** Absolute ms at which an unfilled resting LIMIT entry is cancelled.
+   *  Omitted → `createdAt + LIMIT_ORDER_TTL_MS` (the flat 2h default).
+   *
+   *  A flat TTL is wrong whenever it outlives the thesis that produced the
+   *  order. Intraday's max hold is 45-120 minutes, so a 2h resting order could
+   *  wait LONGER than the trade it was trying to open would have lasted, and
+   *  fill on a 5-minute entry confirmation two hours stale. Prev-4H Range is
+   *  the mirror case: its position is time-stopped at the end of the same 4H
+   *  bar it was armed in, so an order filling at 3h50m opens a trade with ten
+   *  minutes to live. Each engine that knows its own horizon sets this; Pro,
+   *  which has no time stop, keeps the default. */
+  expiresAt?: number;
   /** EXIT orders only: the id of the SimPosition this order closes.
    *  Exit orders used to be matched back to a position by SYMBOL alone, which
    *  is only unambiguous while one position per symbol exists — and nothing
@@ -887,6 +899,14 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
       confidence: ev.confidence,
       executeAt: Date.now() + delayMs,
       createdAt: Date.now(),
+      // A resting entry may not outlive the trade it is trying to open. The 5M
+      // entry confirmation behind this order decays on the same clock as the
+      // hold budget, so half of that budget is the longest a stale confirmation
+      // is worth acting on. Falls back to the flat TTL when the plan carried no
+      // hold budget.
+      expiresAt: typeof ev.decision?.risk?.maxHoldMs === 'number'
+        ? Date.now() + ev.decision.risk.maxHoldMs * ENTRY_TTL_HOLD_FRACTION
+        : undefined,
       // Carry the setup-type-correct hold budget from the entry-time RiskPlan
       // (see the SimPosition.maxHoldMs doc comment) — without this, every
       // position falls back to a single hardcoded default at exit-check time.
@@ -913,6 +933,20 @@ const EXIT_ORDER_SIDES = new Set(['close_long', 'close_short', 'partial_tp1']);
  *  reading sim results as a forecast — an entry the simulation cancelled at
  *  2h is one the live bot may still fill at 3h. */
 export const LIMIT_ORDER_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+/** When an unfilled resting entry is cancelled: the engine's own horizon when
+ *  it set one (`PendingOrder.expiresAt`), else the flat 2h default. */
+export function orderExpiryAt(o: Pick<PendingOrder, 'createdAt' | 'expiresAt'>): number {
+  return typeof o.expiresAt === 'number' && Number.isFinite(o.expiresAt)
+    ? o.expiresAt
+    : o.createdAt + LIMIT_ORDER_TTL_MS;
+}
+
+/** Fraction of a setup's max-hold budget an unfilled entry may consume before
+ *  it is cancelled. At 0.5 an intraday BREAKOUT_RETEST (60 min) rests 30
+ *  minutes and a TREND_PULLBACK (120 min) rests 60 — always less than the
+ *  trade's own life, never the flat 2h that outlived it. */
+export const ENTRY_TTL_HOLD_FRACTION = 0.5;
 
 export interface FillableOrdersResult {
   due: PendingOrder[];
@@ -967,7 +1001,7 @@ export function selectFillableOrders(pending: PendingOrder[], now: number, price
         continue;
       }
       due.push(o);
-    } else if (now - o.createdAt >= LIMIT_ORDER_TTL_MS) {
+    } else if (now >= orderExpiryAt(o)) {
       expired.push(o);
     }
   }

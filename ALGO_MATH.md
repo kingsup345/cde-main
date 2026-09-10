@@ -400,7 +400,23 @@ fillPrice(buy)  = market · (1 + slippagePercent/100)      ← תמיד לרעת
 fillPrice(sell) = market · (1 − slippagePercent/100)
 ```
 פקודה נכנסת ל-`pending` עם `executeAt = now + executionDelaySec`. limit:
-מילוי רק כשהמחיר חוצה את ה-signalPrice, TTL `LIMIT_ORDER_TTL_MS` (2h).
+מילוי רק כשהמחיר חוצה את ה-signalPrice.
+
+**TTL נגזר-חלון (2026-09-10).** `LIMIT_ORDER_TTL_MS` (2h) היה שטוח לכל ארבעת
+הבוטים — ופקודה נחה לא יכולה לחיות יותר מהתזה שיצרה אותה. עכשיו
+`orderExpiryAt(o) = o.expiresAt ?? o.createdAt + LIMIT_ORDER_TTL_MS`:
+
+| בוט | `expiresAt` | למה |
+|---|---|---|
+| **Intraday** | `now + maxHoldMs · ENTRY_TTL_HOLD_FRACTION (0.5)` → 45–60 דק' | ה-max hold הוא 45–120 דק'; ב-TTL של 2h הפקודה יכלה לנוח **יותר זמן מכל חיי העסקה**, ולהתמלא על אישור M5 בן שעתיים |
+| **Prev-4H** | `min(plan.windowEnd, now + 2h)` | הפוזיציה נעצרת בסוף אותו נר 4H; מילוי ב-3:50 פותח עסקה עם 10 דקות לחיות |
+| **Pro** | ברירת מחדל (2h) | אין time stop — 2h נכון |
+| **TrendBreakout** | לא רלוונטי | כניסות MARKET |
+
+**מצב המילוי לפי בוט:** MARKET רק ל-TrendBreakout (הסטופ שלו `entry ∓ 1.5·ATR`
+נע עם הכניסה → מחיר הכניסה לא משנה R:R, והאישור M5 מתכלה מהר). LIMIT לשלושת
+האחרים — חזק במיוחד ל-Prev-4H, ששם `R = |entry − mid|` והסטופ נשאר ב-`mid`,
+כך שכניסה גרועה מנפחת את R ישירות.
 
 ### עמלות
 `entryFee` + `exitFee` על הנוציונל (taker לשוק). `totalCostPercent` = סכום

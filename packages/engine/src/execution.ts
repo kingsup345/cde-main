@@ -92,6 +92,8 @@ export {
   blockEntry,
   generateNewOrders,
   LIMIT_ORDER_TTL_MS,
+  orderExpiryAt,
+  ENTRY_TTL_HOLD_FRACTION,
   selectFillableOrders,
   fillDueOrders,
   applyFundingAccrual,

@@ -25,6 +25,7 @@ import {
   isInEntryCooldown,
   MIN_SIM_ENTRY_USD,
   MIN_ORDER_EXCEEDS_POSITION_TARGET,
+  LIMIT_ORDER_TTL_MS,
   blockEntry
 } from './simExecution';
 import {
@@ -377,7 +378,14 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
       reason: ev.reasoning,
       confidence: ev.confidence,
       executeAt: now + delayMs,
-      createdAt: now
+      createdAt: now,
+      // The position this order opens is time-stopped at the end of the SAME 4H
+      // bar the setup was armed in, so the order must die with the window that
+      // justifies it. Under the flat 2h TTL an order armed early in the window
+      // could fill at 3h50m and open a trade with ten minutes left to reach a
+      // target sized off the whole range. Cap at the window end (never past it,
+      // never longer than the flat TTL would have allowed).
+      expiresAt: Math.min(plan.windowEnd, now + LIMIT_ORDER_TTL_MS)
     });
   }
 
