@@ -116,6 +116,25 @@ export const PRO_INDICATOR_WEIGHTS = {
  */
 export const PRO_COVERAGE_FULL_WEIGHT = 88;
 
+/**
+ * The four §2 indicators that all read ONE thing — how far price is stretched
+ * from its recent mean — and therefore cast the same directional vote together
+ * on any dip or spike: RSI(14), price-vs-MA(20), Bollinger %B, Stochastic %K.
+ *
+ * §2's dominance/margin formula was built to reward INDEPENDENT agreement, so
+ * four echoes of a single reading inflate it: a lone crowded-oscillator signal
+ * clears the 70 bar, and in mid-range four HOLD echoes bury a real MACD/volume
+ * lean. Rather than add a gate, `computeProSignal` scales this cluster's
+ * combined contribution to whichever bucket it feeds by 1/sqrt(n) — n agreeing
+ * members count as ~sqrt(n) effective votes, not n. MACD, Volume Profile,
+ * Volume Trend and 24h-momentum stay independent (full weight).
+ *
+ * Names MUST match what the vote* functions push (asserted by a test).
+ */
+export const PRO_CORRELATED_CLUSTER: ReadonlySet<string> = new Set([
+  'RSI(14)', 'MA(20)', 'Bollinger(20,2)', 'Stochastic(14,3)'
+]);
+
 function pushVote(
   signals: ProIndicatorSignal[],
   name: string,
@@ -237,6 +256,51 @@ function voteMomentum24h(priceChange24h: number, signals: ProIndicatorSignal[]):
   else pushVote(signals, 'שינוי 24ש׳', w, 'HOLD', 65, `שינוי 24ש׳ מתון (${priceChange24h.toFixed(1)}%)`);
 }
 
+/**
+ * §2's scoring — `weighted = weight × (confidence/100)`, routed to the bucket
+ * the indicator voted for — WITH a correlation penalty on the oscillator
+ * cluster.
+ *
+ * The four PRO_CORRELATED_CLUSTER indicators all read one thing (displacement
+ * from the recent mean), so their votes are echoes, not independent
+ * confirmations. §2's dominance/margin was built for independent agreement, so
+ * four echoes of one reading inflate it. Fix: each bucket's cluster
+ * contribution is divided by √n where n is how many cluster members voted that
+ * way — 4 agreeing oscillators count as 2 effective votes, not 4; 2 count as
+ * ~1.4. `totalWeight` is the RAW sum of every indicator's weight, unchanged, so
+ * `coverage` (totalWeight / 88) is unaffected — the information is still there,
+ * it is just not counted four times.
+ *
+ * Pure: no candle math, so it is unit-testable with hand-built signal arrays.
+ */
+export function aggregateProBuckets(signals: ProIndicatorSignal[]): {
+  buyScore: number; sellScore: number; holdScore: number; totalWeight: number;
+} {
+  const bucketScore: Record<'BUY' | 'SELL' | 'HOLD', number> = { BUY: 0, SELL: 0, HOLD: 0 };
+  const clusterWeighted: Record<'BUY' | 'SELL' | 'HOLD', number> = { BUY: 0, SELL: 0, HOLD: 0 };
+  const clusterCount: Record<'BUY' | 'SELL' | 'HOLD', number> = { BUY: 0, SELL: 0, HOLD: 0 };
+  let totalWeight = 0;
+  for (const s of signals) {
+    const weighted = s.weight * (s.confidence / 100);
+    totalWeight += s.weight;
+    if (PRO_CORRELATED_CLUSTER.has(s.name)) {
+      clusterWeighted[s.signal] += weighted;
+      clusterCount[s.signal] += 1;
+    } else {
+      bucketScore[s.signal] += weighted;
+    }
+  }
+  for (const dir of ['BUY', 'SELL', 'HOLD'] as const) {
+    if (clusterCount[dir] > 0) bucketScore[dir] += clusterWeighted[dir] / Math.sqrt(clusterCount[dir]);
+  }
+  return {
+    buyScore: Number(bucketScore.BUY.toFixed(2)),
+    sellScore: Number(bucketScore.SELL.toFixed(2)),
+    holdScore: Number(bucketScore.HOLD.toFixed(2)),
+    totalWeight
+  };
+}
+
 // ── §2 — the aggregate result ────────────────────────────────────────────────
 
 export interface ProSignalResult {
@@ -312,20 +376,7 @@ export function computeProSignal(
   voteVolumeTrend(volumeTrend, priceChange24h, signals);
   voteMomentum24h(priceChange24h, signals);
 
-  // §2's scoring: weighted = weight × (confidence/100), routed to whichever
-  // bucket the indicator voted for; totalWeight sums every indicator's OWN
-  // weight regardless of which bucket it fed.
-  let buyScore = 0, sellScore = 0, holdScore = 0, totalWeight = 0;
-  for (const s of signals) {
-    const weighted = s.weight * (s.confidence / 100);
-    if (s.signal === 'BUY') buyScore += weighted;
-    else if (s.signal === 'SELL') sellScore += weighted;
-    else holdScore += weighted;
-    totalWeight += s.weight;
-  }
-  buyScore = Number(buyScore.toFixed(2));
-  sellScore = Number(sellScore.toFixed(2));
-  holdScore = Number(holdScore.toFixed(2));
+  const { buyScore, sellScore, holdScore, totalWeight } = aggregateProBuckets(signals);
 
   const maxScore = Math.max(buyScore, sellScore, holdScore);
   // BUY wins a draw with HOLD so a signal that ties the neutral bucket is
@@ -373,7 +424,15 @@ export function computeProSignal(
   // vote still vetoes (this only ever promotes a HOLD).
   const trendLaneUp = ema50 > ema200 && currentPrice > ema50 && notExtended;
   const trendLaneDown = ema50 < ema200 && currentPrice < ema50 && notExtended;
-  if (action === 'HOLD' && trendLaneUp) {
+  // The lane rescues any NON-BUY outcome, not just HOLD. Since the correlation
+  // penalty stopped four HOLD echoes from burying the independent votes, a
+  // shallow pullback to the EMA50 — exactly what this lane exists to buy — now
+  // often reads as a weak SELL (the MACD ticks mildly bearish on the dip).
+  // Pro's SELL is capped at 50 and closes nothing on the worker (minConfidence
+  // 60 > 50), so promoting a sub-threshold SELL to BUY here costs nothing and
+  // restores the intended behaviour. A genuine breakdown fails `notExtended` /
+  // `price > ema50` fast, so the lane stops catching it.
+  if (action !== 'BUY' && trendLaneUp) {
     action = 'BUY';
   } else if (action === 'HOLD' && trendLaneDown) {
     action = 'SELL';
@@ -507,9 +566,13 @@ export function proMinConfidence(riskLevel: ProRiskLevel, override?: number): nu
  * now the only definition — a bucket, not a formula, because the buckets
  * (10%/15%) don't interpolate: they were never meant to.
  */
-export const PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD = 80;
-export const PRO_ALLOCATION_DEFAULT_PERCENT = 0.10;
-export const PRO_ALLOCATION_HIGH_PERCENT = 0.10;
+/**
+ * Entry size as a fraction of spendable capital. ONE number: confidence has not
+ * scaled Pro's size since the 10%/15% split was removed (both buckets were
+ * already 0.10). Mirrors `POSITION_TARGET_PCT` — Pro's gate sizes off that; this
+ * is the display constant so the UI and the engine cannot drift apart again.
+ */
+export const PRO_ENTRY_ALLOCATION_PERCENT = 0.10;
 
 // ── §5 — exit levels ─────────────────────────────────────────────────────────
 
@@ -549,10 +612,11 @@ export function proStopTpLevels(
 
 // ── Warm-up floor ─────────────────────────────────────────────────────────────
 
-/** Candles needed before every indicator above can compute (MACD's 26+9 is
- *  the longest). Not part of §2 — alg.md does not state a warm-up
- *  requirement, this is purely "how much history the math needs". */
-export const MIN_PRO_CANDLES = 20;
+/** Candles needed before every indicator above can compute. MACD(12,26,9) is
+ *  the long pole — 26+9 = 35 bars before its signal line is real — so 40 gives
+ *  it a few bars of headroom rather than voting on a half-warm histogram.
+ *  Not part of §2; purely "how much history the math needs". */
+export const MIN_PRO_CANDLES = 40;
 
 // ── §4/§5 — position-level exit ──────────────────────────────────────────────
 
@@ -601,8 +665,24 @@ export function evaluateProExit(
   const takeProfit1 = pos.takeProfit1 ?? pos.entryPrice * (1 + s * PRO_TAKE_PROFIT_PERCENT / 100);
   const takeProfit2 = pos.takeProfit2 ?? pos.entryPrice * (1 + s * TP2_PERCENT / 100);
 
-  if (reachedStop(currentPrice, stopLoss, isLong)) {
-    return { shouldExit: true, exitType: 'FULL', reason: `Stop Loss ב-${stopLoss.toFixed(6)} (שינוי ${changePercent.toFixed(2)}%)` };
+  // After TP1 has taken its half, the runner never gives back a loss: the stop
+  // ratchets to break-even. It used to be closed on the FIRST tick back below
+  // TP1 — a hair-trigger that booked the runner out before TP2 could ever
+  // print (the same defect that was removed from the Prev-4H bot). Now it
+  // rides to TP2, a real stop, or the confidence-gated SELL flip.
+  const runnerStop = pos.tp1Hit
+    ? (isLong ? Math.max(stopLoss, pos.entryPrice) : Math.min(stopLoss, pos.entryPrice))
+    : stopLoss;
+
+  if (reachedStop(currentPrice, runnerStop, isLong)) {
+    const atBreakEven = pos.tp1Hit && Math.abs(runnerStop - pos.entryPrice) <= Math.abs(pos.entryPrice) * 1e-9;
+    return {
+      shouldExit: true,
+      exitType: 'FULL',
+      reason: atBreakEven
+        ? `Break-even stop אחרי TP1 ב-${runnerStop.toFixed(6)} (שינוי ${changePercent.toFixed(2)}%)`
+        : `Stop Loss ב-${runnerStop.toFixed(6)} (שינוי ${changePercent.toFixed(2)}%)`
+    };
   }
   // TP2 first: past it, there is nothing left to leave running.
   if (reachedTarget(currentPrice, takeProfit2, isLong)) {
@@ -614,10 +694,6 @@ export function evaluateProExit(
       exitType: 'PARTIAL_50',
       reason: `TP1 ב-${takeProfit1.toFixed(6)} (שינוי ${changePercent.toFixed(2)}%) — סגירת ${(TP1_EXIT_FRACTION * 100).toFixed(0)}%`
     };
-  }
-  // The runner gave TP1 back — bank the remainder rather than round-trip it.
-  if (pos.tp1Hit && !reachedTarget(currentPrice, takeProfit1, isLong)) {
-    return { shouldExit: true, exitType: 'FULL', reason: `חזרה מתחת ל-TP1 אחרי יציאה חלקית (${changePercent.toFixed(2)}%)` };
   }
   if (currentSignal.action === 'SELL' && currentSignal.confidence >= minConfidence) {
     return { shouldExit: true, exitType: 'FULL', reason: `היפוך אות: SELL בביטחון ${currentSignal.confidence.toFixed(1)} >= ${minConfidence}` };

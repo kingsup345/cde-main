@@ -157,9 +157,21 @@ GROSS_RR=.. ENTRY_FEE%=.. EXIT_FEE%=.. SLIPPAGE%=.. TOTAL_COST%=.. NET_RR=..`
 RSI 15 · MA 15 · MACD 18 · Bollinger 12 · Stochastic 8 ·
 Volume Profile 15 · Volume Trend 10 · שינוי 24h 12   (סה"כ משקל = 105)
 ```
-`confidence = dominance × margin × coverage`, כאשר
-`coverage = min(1, totalWeight / PRO_COVERAGE_FULL_WEIGHT)` ו-
-`PRO_COVERAGE_FULL_WEIGHT = 88` (**לא** 105 — ראה סעיף פערים בתחתית).
+`confidence = 50 + (dominance·45 + margin·25)·coverage − (1−coverage)·10`, כאשר
+`coverage = min(1, totalWeight / 88)`.
+
+**עונש קורלציה (2026-09-11, `aggregateProBuckets`):** RSI, מרחק-מ-MA20,
+Bollinger %B ו-Stochastic %K מודדים את **אותו דבר** (כמה המחיר מתוח מהממוצע) —
+בכל דיפ הם מצביעים יחד. `dominance/margin` נבנו לתגמל הסכמה **בלתי-תלויה**, אז
+4 הדים של קריאה אחת ניפחו אותם: סיגנל אוסילטור בודד עבר את 70, ובאמצע-טווח
+4 הדי-HOLD קברו נטייה אמיתית של MACD/נפח. עכשיו תרומת האשכול לכל דלי מחולקת
+ב-`√n` (n = כמה חברי אשכול הצביעו כך) — 4 אוסילטורים מסכימים = 2 קולות
+אפקטיביים, לא 4. `totalWeight` נשאר הסכום הגולמי (coverage לא מושפע). MACD /
+Volume Profile / מגמת נפח / שינוי 24h נשארים עצמאיים במשקל מלא.
+
+**נתיב trend-participation** (`computeProSignal`): כש-`EMA50>EMA200` והמחיר מעל
+EMA50 ולא מתוח (≤3×ATR ממנו) — כל תוצאה **שאינה BUY** (כולל SELL חלש) מקודמת
+ל-BUY. פרו SELL חסום ב-50 ולא סוגר כלום בפועל (סף 60>50), אז הקידום ללא עלות.
 
 ### סף כניסה
 **שטוח, 70**, בלי קשר ל-riskLevel (`PRO_DEFAULT_ENTRY_CONFIDENCE`,
@@ -198,11 +210,15 @@ budget = min(
   אם אף פעם לא נחצה. **מעוגל לפי סדר גודל המחיר** (`roundToPriceScale`,
   `tradeEngine.ts`) — לא `.toFixed(2)` קבוע, אחרת נכס תת-סנט מתעגל לשגיאה.
 
-### יציאה
+### יציאה (`evaluateProExit`)
 ```
-Stop Loss  = -4.2%   (PRO_STOP_LOSS_PERCENT)
-Take Profit = +3.0%  (PRO_TAKE_PROFIT_PERCENT)
-+ Flip-to-SELL: אם מגיע איתות SELL בביטחון >= סף — סוגר את כל הפוזיציה
+SL   = ATR-scaled: clamp(atr%·1.6, 1.8%, 4.2%)   ·   תקרה PRO_STOP_LOSS_PERCENT 4.2%
+TP1  = max(1.5%, 1.5×SL)   ·   50% נסגר (TP1_EXIT_FRACTION)
+TP2  = TP1 × 1.5
+הרץ (50% שנותר) אחרי TP1 → סטופ עולה ל-BREAK-EVEN (2026-09-11). רץ ל-TP2 /
+     סטופ אמיתי / Flip-to-SELL. פעם נסגר על הטיק הראשון מתחת ל-TP1 — hair-trigger
+     זהה לזה שהוסר מ-Prev-4H, גזז את הרץ לפני TP2.
+Flip-to-SELL: SELL בביטחון ≥ סף → סוגר הכל. (בפועל כמעט אף פעם — SELL חסום ב-50, סף 60.)
 ```
 Spot בלבד — אין שורט, SELL על פוזיציה לא-מוחזקת מוצג בלבד.
 
@@ -439,7 +455,8 @@ SHORT מקבל. חלון הצבירה חסום ל-8 שעות כדי שהשבתת
 
 ## פערים ידועים, לא-קריטיים (לא תוקנו — לתעד בלבד)
 - **Pro `PRO_COVERAGE_FULL_WEIGHT=88`** מול סכום משקלות בפועל **105** —
-  לא נבדק לעומק אם זה מקדים coverage=1 בתקופת חימום. (`proAlgEngine.ts:116`)
+  לא נבדק לעומק אם זה מקדים coverage=1 בתקופת חימום. (עונש הקורלציה לא נוגע
+  ב-`totalWeight` — הוא נשאר 105 — אז הפער הזה ללא שינוי.)
 - **`scripts/pathStudy.ts` + `pathEngine.ts`/`pathStudy.ts`** — נשארו בקוד
   (מיוצאים מ-`@cde/engine/analysis`, מסופקים ל-`aggregateToH4` ולבקטסטים) אך
   **אף בוט לא סוחר לפיהם יותר** מאז שנתיב 4H עבר ל-Prev-4H Range.

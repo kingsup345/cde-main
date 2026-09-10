@@ -186,20 +186,30 @@ netRR         = (rewardPercent − totalCostPercent) / riskPercent      ← נד
 
 ```
 weighted     = weight · (signalConfidence / 100)
-buyScore    += weighted   (אם האות buy)     ; sellScore / holdScore בהתאמה
-totalWeight += weight
+totalWeight += weight                             ← סכום גולמי של כל 8 המשקלים (105)
+
+# עונש קורלציה (aggregateProBuckets):
+#   אשכול = { RSI(14), MA(20), Bollinger(20,2), Stochastic(14,3) }  — כולם מודדים מתיחות מהממוצע
+#   לכל דלי dir:  bucket[dir] += Σ(weighted של non-cluster)  +  Σ(weighted של cluster ב-dir) / √n
+#                 n = כמה חברי אשכול הצביעו dir
+#   → 4 אוסילטורים מסכימים = 2 קולות אפקטיביים, לא 4.  MACD/VP/VolTrend/Mom — משקל מלא.
 
 maxScore    = max(buyScore, sellScore, holdScore)
 secondScore = הגבוה הבא
 
 dominance = maxScore / totalWeight
 margin    = (maxScore − secondScore) / maxScore
-coverage  = min(1, totalWeight / PRO_COVERAGE_FULL_WEIGHT)      PRO_COVERAGE_FULL_WEIGHT = 88
+coverage  = min(1, totalWeight / 88)              ← totalWeight = 105 תמיד → coverage ≈ 1 אחרי חימום
 
 confidence = 50 + (dominance·45 + margin·25)·coverage − (1 − coverage)·10
 ```
-מוגבל לטווח סביר, מוצג כאחוז. **זה Score, לא הסתברות** — "70%" = 70 מתוך 100
-בציון משוקלל.
+תוצאה שאינה BUY חסומה ב-50 (`action !== 'BUY' → min(conf, 50)`). **זה Score,
+לא הסתברות.** לפני עונש הקורלציה (2026-09-11): קריאת אוסילטור בודדת עברה 70,
+ובאמצע-טווח 4 הדי-HOLD קברו נטיית MACD/נפח אמיתית.
+
+**נתיב trend-participation:** `EMA50>EMA200` + מחיר מעל EMA50 + לא-מתוח (≤3×ATR) →
+כל תוצאה שאינה BUY (כולל SELL חלש) מקודמת ל-BUY. SELL של פרו חסום ב-50 ולא
+סוגר כלום בפועל, אז הקידום ללא עלות.
 
 ### סף כניסה
 **שטוח 70** (`PRO_DEFAULT_ENTRY_CONFIDENCE`), ללא תלות ב-`riskLevel`.

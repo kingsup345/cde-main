@@ -12,11 +12,9 @@ import {
   calculateOptimalEntryPrice,
   PRO_DEFAULT_ENTRY_CONFIDENCE,
   PRO_CONFIDENCE_BY_RISK,
-  PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD,
-  PRO_ALLOCATION_DEFAULT_PERCENT,
-  PRO_ALLOCATION_HIGH_PERCENT,
   PRO_STOP_LOSS_PERCENT,
   PRO_TAKE_PROFIT_PERCENT,
+  PRO_ALG_MIN_CANDLES,
   proStopTpLevels,
   type ProSignalResult
 } from '@cde/engine/analysis';
@@ -352,15 +350,27 @@ describe('§5 — fixed-percentage exits, independent of the recommendation', ()
     expect(d.shouldExit).toBe(false);
   });
 
-  it('banks the runner if it gives TP1 back', () => {
+  it('the runner rides a dip below TP1 as long as it stays above break-even', () => {
+    // 2026-09-11: no longer a hair-trigger close. Above entry → keep running.
     const d = evaluateProExit(
       { entryPrice: 100, tp1Hit: true },
-      100 + PRO_TAKE_PROFIT_PERCENT - 0.5,
+      100 + PRO_TAKE_PROFIT_PERCENT - 0.5, // below TP1, still +2.5%
+      stubSignal('BUY', 90),
+      minConfidence
+    );
+    expect(d.shouldExit).toBe(false);
+  });
+
+  it('the runner closes at break-even, not a loss, once price returns to entry', () => {
+    const d = evaluateProExit(
+      { entryPrice: 100, tp1Hit: true },
+      100 - 0.01,
       stubSignal('BUY', 90),
       minConfidence
     );
     expect(d.shouldExit).toBe(true);
     expect(d.exitType).toBe('FULL');
+    expect(d.reason).toContain('Break-even');
   });
 
   it('a SHORT is measured with the short formula, not the long one', () => {
@@ -444,8 +454,8 @@ describe('buildProEvaluation — the warm-up floor is honest about it', () => {
     expect(ev.willExecute).toBe(false);
   });
 
-  it('accepts exactly MIN_PRO_CANDLES (20) as the warm-up boundary', () => {
-    const candles: Candle[] = Array.from({ length: 20 }, (_, i) => ({
+  it('accepts exactly PRO_ALG_MIN_CANDLES as the warm-up boundary', () => {
+    const candles: Candle[] = Array.from({ length: PRO_ALG_MIN_CANDLES }, (_, i) => ({
       timestamp: 1_700_000_000_000 + i * 3_600_000,
       open: 100, high: 101, low: 99, close: 100, volume: 1000
     }));

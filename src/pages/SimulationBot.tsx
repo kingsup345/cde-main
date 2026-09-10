@@ -17,7 +17,7 @@ import { useBybitSimulationBotContext } from '../contexts/BybitSimulationBotCont
 // the panel starts describing a bot that no longer exists.
 // Pro's entry bar is the operator's flat default (70) — an override in the
 // settings overrides it; the risk table stays exported as reference.
-import { PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD, PRO_ALLOCATION_DEFAULT_PERCENT, PRO_ALLOCATION_HIGH_PERCENT, PRO_DEFAULT_ENTRY_CONFIDENCE, PRO_STOP_LOSS_PERCENT, PRO_TAKE_PROFIT_PERCENT } from '@cde/engine/analysis';
+import { PRO_ENTRY_ALLOCATION_PERCENT, PRO_DEFAULT_ENTRY_CONFIDENCE, PRO_STOP_LOSS_PERCENT, PRO_TAKE_PROFIT_PERCENT } from '@cde/engine/analysis';
 import { SIM_CACHE_KEYS, toAggregated, combineRisk, groupAction, type AggregatedBot } from '../lib/botAggregation';
 import { clearBacktestArchive } from '../services/tradingApiClient';
 
@@ -382,7 +382,7 @@ const SimulationBotPage = () => {
 
           <SimulationEngineColumn
             title="בוט פרו · alg.md"
-            subtitle={`מימוש מדויק של ASSETS/alg.md · הבוט קונה כשהביטחון הכולל עובר ${PRO_DEFAULT_ENTRY_CONFIDENCE}% · הקצאה ${PRO_ALLOCATION_DEFAULT_PERCENT * 100}% (מעל ${PRO_DEFAULT_ENTRY_CONFIDENCE}%) או ${PRO_ALLOCATION_HIGH_PERCENT * 100}% (מעל ${PRO_ALLOCATION_HIGH_CONFIDENCE_THRESHOLD}%) · SL ${PRO_STOP_LOSS_PERCENT}% / TP ${PRO_TAKE_PROFIT_PERCENT}%`}
+            subtitle={`מימוש alg.md · אשכול RSI/MA/BB/Stoch נספר עם עונש קורלציה (1/√n) · קנייה כשהביטחון עובר ${PRO_DEFAULT_ENTRY_CONFIDENCE}% · הקצאה ${PRO_ENTRY_ALLOCATION_PERCENT * 100}% מהמזומן · SL ${PRO_STOP_LOSS_PERCENT}% (תקרה, ATR-scaled) / TP ${PRO_TAKE_PROFIT_PERCENT}%`}
             accentClass="text-amber-400"
             cryptoData={cryptoData}
             cash={pro.cash}
