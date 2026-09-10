@@ -264,3 +264,38 @@ export function evaluateCorrelationGate(input: CorrelationGateInput): Correlatio
 
   return { allowed: true, abstained: false, matches };
 }
+
+/**
+ * Should an ABSTAINED gate block this entry?
+ *
+ * `evaluateCorrelationGate` returns `allowed: true, abstained: true` whenever it
+ * cannot measure the pairing — the candidate has no candle history, or none of
+ * the held book does. Until 2026-09-10 every caller read `allowed` and ignored
+ * `abstained`, so "I could not check" was executed as "these are independent".
+ *
+ * That is backwards precisely when it costs the most. The book is least
+ * verifiable at COLD START — the candle cache is empty — which is also when
+ * every slot is free, cash is untouched and sizing is at full target. The
+ * intraday sim bot opened six full-size correlated longs inside four minutes
+ * (60% of equity on one factor), and all six stopped out together 12 minutes
+ * later for -$102 of a -$107 run.
+ *
+ * So unverified stacking is capped at the same number the VERIFIED path allows:
+ * a book already holding `maxUnverified` positions may not add another one it
+ * cannot prove is independent. The first few still go through — a cap that
+ * blocked from an empty book would deadlock a cold start permanently, since
+ * candle history only accumulates once positions exist.
+ */
+export function blocksOnAbstention(
+  gate: Pick<CorrelationGateResult, 'allowed' | 'abstained'>,
+  heldCount: number,
+  maxUnverified: number = DEFAULT_MAX_CORRELATED
+): boolean {
+  return gate.allowed && gate.abstained === true && heldCount >= maxUnverified;
+}
+
+/** Reason text for an entry blocked by {@link blocksOnAbstention}. */
+export function abstentionBlockReason(heldCount: number, maxUnverified: number): string {
+  return `אין היסטוריית נרות לאימות קורלציה ו-${heldCount} פוזיציות כבר פתוחות `
+    + `(מקס' ${maxUnverified} ללא אימות) — לא נערמים על גורם סיכון שאי-אפשר למדוד`;
+}

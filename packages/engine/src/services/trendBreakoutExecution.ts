@@ -52,7 +52,10 @@ import {
 } from './adaptiveRisk';
 import {
   evaluateCorrelationGate,
+  blocksOnAbstention,
+  abstentionBlockReason,
   toPositionDirection,
+  DEFAULT_MAX_CORRELATED,
   type CorrelatedHolding
 } from './correlation';
 import {
@@ -472,7 +475,16 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       quantity: notional / opts.price,
       budgetUsd: notional,
       leverage: 1,
-      fill: ctx.limitEntries ? 'limit' : 'market',
+      // ALWAYS market — `ctx.limitEntries` is deliberately not consulted here.
+      // A resting limit BELOW market is adverse selection for a breakout: it
+      // fills only when price comes back through the level, i.e. only when the
+      // breakout is failing, while every breakout that runs (the ones this
+      // strategy exists to catch) never fills at all. Live, that showed as five
+      // entries, zero take-profits and three trend-reversal exits. Pullback and
+      // mean-reversion engines legitimately rest below market; a Donchian
+      // breakout cannot. See §5 ENTRY_TOO_EXTENDED — the chase guard, not the
+      // fill mode, is what keeps the entry honest.
+      fill: 'market',
       stopLoss: opts.stopLoss,
       takeProfit: opts.takeProfit,
       takeProfit1: opts.takeProfit1,
@@ -620,10 +632,16 @@ export function generateTrendBreakoutOrders(ctx: TrendBreakoutOrderGenContext): 
       blockEntry(ev, 'CORRELATION', corr.reason ?? 'ריכוז יתר בנכסים מתואמים');
       continue;
     }
+    if (blocksOnAbstention(corr, correlationBook.length, DEFAULT_MAX_CORRELATED)) {
+      blockEntry(ev, 'CORRELATION', abstentionBlockReason(correlationBook.length, DEFAULT_MAX_CORRELATED));
+      continue;
+    }
 
-    // LIMIT mode rests at the plan's own discounted level; MARKET mode fires at
-    // the live price. Sizing is off whichever price the order actually uses.
-    const price = (ctx.limitEntries ? plan.limitEntryPrice : plan.entryRef) || ev.price;
+    // Breakout entries fire at the live reference price, never at the plan's
+    // discounted resting level — see the `fill: 'market'` note in pushOrder.
+    // `plan.limitEntryPrice` stays on the plan for telemetry and for the UI's
+    // "waiting for" display; it is no longer an order price.
+    const price = plan.entryRef || ev.price;
 
     // Position sizing: 10% of equity, independent of stop-loss distance.
     // SL is used only to measure the resulting dollar risk.

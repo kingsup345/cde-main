@@ -555,7 +555,16 @@ const SIM_CONFIG_BOUNDS: Record<string, { min: number; max: number; int?: boolea
   initialAmount: { min: 1, max: 100_000_000 },
   maxPositions: { min: 1, max: 50, int: true },
   maxFuturesPositions: { min: 0, max: 50, int: true },
-  feePercent: { min: 0, max: 5 },
+  // Floor 0.01, NOT 0: this field is a PERCENT (0.1 = Bybit spot taker), but
+  // BYBIT_FEES stores the same rates as FRACTIONS (0.001), so "0.001" is the
+  // natural typo — and it is silently 100x too cheap, because calculateTradingFee
+  // scales by feePercent / FEE_REFERENCE_PERCENT. All four sim bots ran at
+  // 0.001 and charged $0.53 of fees on $61,600 of turnover instead of $61.60,
+  // which also fed a 100x-optimistic totalCostPercent into the netRR and
+  // RISK_VS_COST gates. 0.01 is still 2x under the cheapest real rate
+  // (futures maker, 0.02%), so it blocks the typo without blocking a genuinely
+  // low-fee scenario.
+  feePercent: { min: 0.01, max: 5 },
   slippagePercent: { min: 0, max: 5 },
   executionDelaySec: { min: 0, max: 300 },
   minConfidenceOverride: { min: 1, max: 100 },

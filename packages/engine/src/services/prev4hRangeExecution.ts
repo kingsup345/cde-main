@@ -45,6 +45,14 @@ import {
   resolveSizingBase,
   isBelowCapitalFloor
 } from './intradayParams';
+import {
+  evaluateCorrelationGate,
+  blocksOnAbstention,
+  abstentionBlockReason,
+  toPositionDirection,
+  DEFAULT_MAX_CORRELATED,
+  type CorrelatedHolding
+} from './correlation';
 import { DEFAULT_PREV4H_RANGE_PARAMS, Prev4hRangeParams, readPrev4hRangePlan } from './prev4hRange';
 
 export const uid = (p: string) => `p4h-${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -229,6 +237,24 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
     ctx.positions.filter((pos) => pos.type === 'FUTURES').length +
     ctx.pending.filter((o) => o.type === 'FUTURES' && ENTRY_SIDES.has(o.side)).length;
 
+  // Correlation cluster gate — the same helper Intraday and TrendBreakout use.
+  // Path had NO concentration check at all until 2026-09-10, despite
+  // trendBreakoutExecution's comment claiming "the same helper the intraday and
+  // Path bots use". It is exactly the bot that needs one: every entry is a 4H
+  // range breakout, so a market-wide push breaks a dozen ranges at once and the
+  // confidence-ranked loop fills them in the same tick. Live, it opened three
+  // simultaneous $1,000 entries on its first tick.
+  const h1BySymbol: Record<string, Candle[] | undefined> = {};
+  for (const [sym, set] of Object.entries(ctx.candlesBySymbol)) {
+    if (set?.h1?.length) h1BySymbol[sym] = set.h1;
+  }
+  const correlationBook: CorrelatedHolding[] = [
+    ...ctx.positions.map((pos) => ({ symbol: pos.symbol, direction: toPositionDirection(pos.side) })),
+    ...ctx.pending
+      .filter((o) => ENTRY_SIDES.has(o.side))
+      .map((o) => ({ symbol: o.symbol, direction: toPositionDirection(o.side) }))
+  ];
+
   const ranked = [...ctx.evaluations]
     .filter((ev) => ev.willExecute && ev.price)
     .sort((a, b) => b.confidence - a.confidence);
@@ -265,6 +291,23 @@ export function generatePrev4hRangeOrders(ctx: Prev4hRangeOrderGenContext): Pend
       blockEntry(ev, 'MAX_FUTURES', `SHORT דורש FUTURES — ${futuresCount}/${ctx.maxFuturesPositions} תפוסות`, '[path-sim]');
       continue; // SHORT = futures
     }
+
+    const evDirection = toPositionDirection(plan.direction);
+    const corr = evaluateCorrelationGate({
+      symbol: ev.symbol,
+      direction: evDirection,
+      held: correlationBook,
+      candlesBySymbol: h1BySymbol
+    });
+    if (!corr.allowed) {
+      blockEntry(ev, 'CORRELATION', corr.reason ?? 'ריכוז יתר בנכסים מתואמים', '[path-sim]');
+      continue;
+    }
+    if (blocksOnAbstention(corr, correlationBook.length, DEFAULT_MAX_CORRELATED)) {
+      blockEntry(ev, 'CORRELATION', abstentionBlockReason(correlationBook.length, DEFAULT_MAX_CORRELATED), '[path-sim]');
+      continue;
+    }
+    correlationBook.push({ symbol: ev.symbol, direction: evDirection });
     // LIMIT mode rests at the plan's own discounted level; MARKET mode fires at
     // the live price. Sizing is off whichever price the order actually uses.
     const price = ctx.limitEntries ? plan.limitEntryPrice : plan.entryRef;

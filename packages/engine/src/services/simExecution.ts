@@ -30,6 +30,8 @@ import { validateExposureModel } from './simDefaults';
 import { TP1_EXIT_FRACTION, MAX_LOSS_PERCENT } from './exitPolicy';
 import {
   evaluateCorrelationGate,
+  blocksOnAbstention,
+  abstentionBlockReason,
   toPositionDirection,
   CorrelatedHolding,
   DEFAULT_CORRELATION_LOOKBACK,
@@ -844,6 +846,13 @@ export function generateNewOrders(ctx: OrderGenContext): PendingOrder[] {
       });
       if (!gate.allowed) {
         blockEntry(ev, 'CORRELATION', gate.reason ?? 'קורלציה גבוהה מדי מול פוזיציה פתוחה');
+        continue;
+      }
+      // An abstained gate is "I could not measure this", not "these are
+      // independent" — and it abstains hardest at cold start, when the book
+      // fills fastest. See blocksOnAbstention.
+      if (blocksOnAbstention(gate, correlationBook.length, maxCorrelatedPositions)) {
+        blockEntry(ev, 'CORRELATION', abstentionBlockReason(correlationBook.length, maxCorrelatedPositions));
         continue;
       }
     }
