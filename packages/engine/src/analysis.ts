@@ -26,6 +26,9 @@ export {
   PRO_STOP_ATR_MULT,
   PRO_STOP_MIN_PERCENT,
   proStopTpLevels,
+  proMaxEntryDiscountPercent,
+  PRO_MAX_ENTRY_DISCOUNT_PCT,
+  PRO_ENTRY_DISCOUNT_STOP_FRACTION,
   MIN_PRO_CANDLES as PRO_ALG_MIN_CANDLES
 } from './services/proAlgEngine';
 
@@ -69,9 +72,12 @@ export { MAX_LOSS_PERCENT, TP1_EXIT_FRACTION, weightedAverageExit, capStopLoss }
 export type { ExitLevel } from './services/exitPolicy';
 
 export {
-  CALM_SL_PCT, CALM_TP1_PCT, CALM_TP2_PCT, CALM_SL_THRESHOLD_PCT,
-  isCalmRegime, resolveCalmTp1Percent
+  FIXED_SL_PCT, FIXED_TP1_PCT, FIXED_TP2_PCT,
+  SURGE_REL_VOLUME, SURGE_VOLUME_LOOKBACK, SURGE_MIN_SL_PCT, SURGE_MAX_SL_PCT,
+  TP2_MIN_REWARD_RISK,
+  isBuyingSurge, resolveLadderPercents
 } from './services/calmRegime';
+export type { LadderPercents } from './services/calmRegime';
 
 export type { ScoreContext } from './services/intradaySetupScores';
 export { scoreTrend, scoreMomentum, scoreLocation, scoreParticipation, scoreStructure, retracementAtr } from './services/intradaySetupScores';

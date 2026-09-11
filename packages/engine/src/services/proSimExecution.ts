@@ -25,12 +25,14 @@ import {
   proMinConfidence,
   proTechnicalScore,
   calculateOptimalEntryPrice,
+  proMaxEntryDiscountPercent,
   proStopTpLevels,
   MIN_PRO_CANDLES,
   type ProSignalResult,
   type ProRiskLevel
 } from './proAlgEngine';
 import { PER_ASSET_EXPOSURE_CAP_PERCENT, POSITION_TARGET_PCT, CAPITAL_FLOOR_PCT, resolveSizingBase, isBelowCapitalFloor } from './intradayParams';
+import { isBuyingSurge } from './calmRegime';
 import type { Candle } from './tradeEngine';
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import type { SimPosition, PendingOrder } from './simExecution';
@@ -89,16 +91,29 @@ export function buildProEvaluation(
 
   const tradeSide: SignalEvaluation['tradeSide'] = signal.action === 'BUY' ? 'BUY' : signal.action === 'SELL' ? 'SELL' : 'NONE';
 
-  // §6: compute optimal entry price from indicator support levels.
-  // When limitEntries is on, the bot places a LIMIT at this price and waits.
-  const optimalEntryPrice = calculateOptimalEntryPrice(signal, currentPrice);
-
   // ATR-scaled stop + stop-relative TP ladder, as absolute prices off the
   // signal price. fillDueOrders reanchors them to the actual fill, preserving
   // the % distances. Spot is LONG only.
   // Calm-regime scalp (2026-09-11, operator request, sim only): see
   // calmRegime.ts / proStopTpLevels for the full rationale.
-  const levels = proStopTpLevels(currentPrice, signal.atrPercent, true, { calmRegimeScalp: true });
+  const levels = proStopTpLevels(currentPrice, signal.atrPercent, true, {
+    calmRegimeScalp: true,
+    // The only thing that widens the fixed 2.3% stop — measured on the same
+    // candle series §2's own indicators are computed from.
+    buyingSurge: isBuyingSurge(candles)
+  });
+
+  // §6: compute optimal entry price from indicator support levels.
+  // When limitEntries is on, the bot places a LIMIT at this price and waits —
+  // so the distance from market has to be something the order TTL can actually
+  // fill. Derived from THIS trade's stop distance (levels above) rather than a
+  // flat number: see proMaxEntryDiscountPercent.
+  const stopPercent = currentPrice > 0
+    ? (Math.abs(currentPrice - levels.stopLoss) / currentPrice) * 100
+    : undefined;
+  const optimalEntryPrice = calculateOptimalEntryPrice(signal, currentPrice, {
+    maxDiscountPercent: proMaxEntryDiscountPercent(stopPercent)
+  });
 
   return {
     symbol,

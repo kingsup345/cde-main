@@ -1,50 +1,99 @@
 /**
- * Calm-regime scalp — opt-in, off by default everywhere it matters (LIVE, tests).
+ * The fixed scalp ladder — SL 2.3% / TP1 1.8% / TP2 3.5% — and its one exception.
  * ============================================================================
- * Operator request (2026-09-11): in a QUIET market, trade a tighter ladder —
- * SL 2.3%, TP1 1.8% (fast 50% partial), TP2 3.5% — instead of each bot's own
- * dynamic (usually wider) levels, so small moves get taken instead of chased.
- * In a genuinely volatile market, change nothing: the dynamic levels already
- * reflect real ATR/structure and stay.
+ * Operator decision (2026-09-11): every sim bot trades ONE fixed ladder, so
+ * small moves get taken instead of chased:
  *
- * "Quiet" is defined the same way in all four bots so the definition itself
- * cannot become a hidden per-bot difference: the bot's OWN dynamic stop
- * distance is compared to CALM_SL_THRESHOLD_PCT. If the dynamic stop would
- * already be at or past the threshold, volatility (or structure) is already
- * wide — a "big move" — and nothing changes. Below it, the ladder is
- * standardized to the fixed calm numbers.
+ *     SL = 2.3%      TP1 = 1.8% (fast 50% partial)      TP2 = 3.5%
  *
- * R:R note: TP1/SL = 1.8/2.3 = 0.78 — BELOW every bot's minRewardRisk gate
- * (1.2). That is deliberate: TP1 is a fast partial, not the trade's whole
- * thesis. The R:R gate in the calm branch is measured to TP2 instead
- * (3.5/2.3 = 1.52, clears 1.2) — the runner is where the edge has to live.
- * TP1 itself is never allowed to WIDEN a bot's own target — see
- * `resolveCalmTp1Percent` — MEAN_REVERSION's VWAP-driven target can be
- * tighter than 1.8%, and calm-regime must never make a target harder to
- * reach.
+ * TP1 is FIXED at 1.8% — it is never widened AND never narrowed to a bot's own
+ * dynamic target. A previous revision floored it at `min(1.8, dynamicTp1)`,
+ * which quietly gave Path and Bybit a 1.5% target; the operator wants 1.8
+ * everywhere.
+ *
+ * THE ONE EXCEPTION — a buying surge. When a lot of buyers show up at once, a
+ * flat 2.3% stop is inside the noise of the move and gets wicked out of a trade
+ * that was right. Only then does the stop widen, to the bot's OWN dynamic
+ * (ATR / structure) stop — the number that already reflects that symbol's real
+ * volatility — clamped to [2.3%, MAX_LOSS_PERCENT].
+ *
+ * TP1 stays 1.8% even in a surge: the whole point is a fast small profit. That
+ * does make TP1's reward:risk worse (1.8/4.2 = 0.43), which is intentional and
+ * why the R:R gate in every bot is measured against TP2, not TP1 — and why TP2
+ * scales with the stop (`max(3.5%, 1.2 × SL)`) so the gate stays satisfiable
+ * instead of silently rejecting every surge trade.
  */
 
-/** Fixed stop distance in the calm branch, as a percent of entry. */
-export const CALM_SL_PCT = 2.3;
-/** Fixed first-target distance (50% partial) in the calm branch. Never used
- *  directly — see `resolveCalmTp1Percent`, which floors it at the bot's own
- *  (possibly tighter) dynamic target. */
-export const CALM_TP1_PCT = 1.8;
-/** Fixed second-target distance (the runner) in the calm branch. */
-export const CALM_TP2_PCT = 3.5;
-/** The dynamic stop, as a percent of entry, at or above which the calm branch
- *  does not apply — "a big move", where the bot's own ATR/structure already
- *  wants a wider stop than the calm fixed one. */
-export const CALM_SL_THRESHOLD_PCT = 2.3;
+import type { Candle } from './tradeEngine';
+import { computeRelativeVolume } from './tradeEngine';
+import { MAX_LOSS_PERCENT } from './exitPolicy';
 
-/** True when the bot's own dynamic stop is tight enough for the calm ladder
- *  to apply. `dynamicSlPct` is that stop as a percent of entry (positive). */
-export function isCalmRegime(dynamicSlPct: number): boolean {
-  return Number.isFinite(dynamicSlPct) && dynamicSlPct < CALM_SL_THRESHOLD_PCT;
+/** The fixed ladder, as percentages of entry. */
+export const FIXED_SL_PCT = 2.3;
+export const FIXED_TP1_PCT = 1.8;
+export const FIXED_TP2_PCT = 3.5;
+
+/** Last bar's volume must be at least this multiple of its own 20-bar average
+ *  to count as "a lot of buyers". Volume alone is direction-blind — a spike can
+ *  just as easily be a wave of SELLERS — so `isBuyingSurge` also requires the
+ *  bar to close green. */
+export const SURGE_REL_VOLUME = 2.0;
+export const SURGE_VOLUME_LOOKBACK = 20;
+
+/** The stop may widen only within these bounds during a surge. */
+export const SURGE_MIN_SL_PCT = FIXED_SL_PCT;
+export const SURGE_MAX_SL_PCT = MAX_LOSS_PERCENT;
+
+/** TP2 must keep this reward:risk against the (possibly widened) stop, because
+ *  TP2 is what every bot's R:R gate is measured on in this ladder. Matches the
+ *  bots' own `minRewardRisk` / `minRR`. */
+export const TP2_MIN_REWARD_RISK = 1.2;
+
+/**
+ * "A lot of buyers": the last closed bar traded at least SURGE_REL_VOLUME times
+ * its own recent average volume AND closed up. Returns false when there is not
+ * enough history to judge — an unknown surge is not a surge.
+ */
+export function isBuyingSurge(
+  candles: Candle[] | undefined,
+  lookback: number = SURGE_VOLUME_LOOKBACK,
+  now: number = Date.now()
+): boolean {
+  if (!candles || candles.length < 2) return false;
+  const relVolume = computeRelativeVolume(candles, lookback, now);
+  if (relVolume === undefined || relVolume < SURGE_REL_VOLUME) return false;
+  const last = candles[candles.length - 1];
+  return last.close > last.open;
 }
 
-/** TP1 in the calm branch never WIDENS the bot's own dynamic target — only
- *  tightens it. `dynamicTp1Pct` is the bot's own TP1 as a percent of entry. */
-export function resolveCalmTp1Percent(dynamicTp1Pct: number): number {
-  return Number.isFinite(dynamicTp1Pct) ? Math.min(CALM_TP1_PCT, dynamicTp1Pct) : CALM_TP1_PCT;
+export interface LadderPercents {
+  slPct: number;
+  tp1Pct: number;
+  tp2Pct: number;
+  /** True when the stop was widened by a buying surge — for telemetry/logging. */
+  surged: boolean;
+}
+
+/**
+ * The ladder for one trade. `dynamicSlPct` is the stop the bot would have used
+ * on its own (ATR / structure / range), as a percent of entry — read ONLY
+ * during a surge.
+ */
+export function resolveLadderPercents(input: {
+  dynamicSlPct?: number;
+  buyingSurge?: boolean;
+}): LadderPercents {
+  if (!input.buyingSurge) {
+    return { slPct: FIXED_SL_PCT, tp1Pct: FIXED_TP1_PCT, tp2Pct: FIXED_TP2_PCT, surged: false };
+  }
+  const dyn = typeof input.dynamicSlPct === 'number' && Number.isFinite(input.dynamicSlPct)
+    ? input.dynamicSlPct
+    : FIXED_SL_PCT;
+  const slPct = Math.min(SURGE_MAX_SL_PCT, Math.max(SURGE_MIN_SL_PCT, dyn));
+  return {
+    slPct,
+    tp1Pct: FIXED_TP1_PCT,
+    tp2Pct: Math.max(FIXED_TP2_PCT, slPct * TP2_MIN_REWARD_RISK),
+    surged: true
+  };
 }

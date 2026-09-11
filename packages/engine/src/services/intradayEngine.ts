@@ -27,6 +27,7 @@ import { detectRegime1H, Regime1H } from './intradayRegime';
 import { detectSetup15M, Setup15M } from './intradaySetup';
 import { confirmEntry5M, Entry5M } from './intradayEntry';
 import { evaluateCostEdge, CostAnalysis, buildRiskPlan, RiskPlan, FIXED_TP_PERCENT } from './intradayRisk';
+import { isBuyingSurge, SURGE_VOLUME_LOOKBACK } from './calmRegime';
 import { DEFAULT_INTRADAY_PARAMS, DecisionGate, Direction, IntradayParams, SetupType,
   withParams
 } from './intradayParams';
@@ -307,6 +308,24 @@ export function evaluateIntradayDecision(input: IntradayDecisionInput): Intraday
     logs.push(`[${symbol}] ${isSoftTrend ? 'SOFT_TREND' : 'TRANSITIONAL'} — Spot מאושר (SS=${setup.setupScore} ES=${entry.entryScore})`);
   }
 
+  // ── SPOT cannot express a SHORT (§19) ──────────────────────────────────────
+  // Three separate branches above force SPOT without consulting the setup's
+  // DIRECTION: the `spotOnly`/no-futures default, the EXTREME-volatility
+  // override, and the TRANSITIONAL/SOFT_TREND quality gate. A SHORT that lands
+  // in any of them used to continue into buildRiskPlan, whose level formula
+  // keys off `tradeType === 'SPOT' || isLong` and therefore built LONG-shaped
+  // levels (stop BELOW entry) for a SHORT — caught three steps later by
+  // validateLevelDirection as the baffling "SL חייב להיות מעל מחיר הכניסה
+  // ב-SHORT" under a RISK gate. Observed live on PUMP / LIT / XRP: a
+  // TRANSITIONAL regime (futuresAllowed=false) approved a SHORT "as Spot" and
+  // then failed the validator. Refuse it here, by name, where the reason is
+  // still legible.
+  if (tradeType === 'SPOT' && setup.direction === 'SHORT') {
+    const reason = `כיוון SHORT אך המסלול הוא SPOT (futuresAllowed=${regime.futuresAllowed}, vol=${regime.volatility}) — ספוט לא יכול לשרטט`;
+    logs.push(`[${symbol}] NO_REGIME — ${reason}`);
+    return finalize(symbol, 'NO_REGIME', 'NO_SIGNAL', regime, setup, entry, null, null, logs, params, now, mkFunnel('NO_REGIME', 'NO_SIGNAL', setup, entry), tradeType);
+  }
+
   // ── GATE 6/7: LIQUIDITY + SPREAD (§26/§27) ─────────────────────────────────
   const spreadPercent = input.spreadPercent ?? 0;
   // Gate on the liquidity of the market the trade will actually execute on —
@@ -349,6 +368,10 @@ export function evaluateIntradayDecision(input: IntradayDecisionInput): Intraday
     targetReference: entry.targetReference,
     atr5: entry.atr5,
     atr15: setup.levels.atr,
+    // The only condition that widens the fixed 2.3% stop — measured on the 5M
+    // series the entry itself was confirmed on, so "a lot of buyers" means at
+    // the moment of entry, not on some slower frame.
+    buyingSurge: isBuyingSurge(input.m5, SURGE_VOLUME_LOOKBACK, now),
     equity: p.portfolioValue,
     // SIM-ONLY (params.useFixedSizingBase, set in SIM_INTRADAY_PARAMS_OVERRIDE).
     // The live bot leaves it unset and keeps sizing against live equity.

@@ -23,7 +23,7 @@ import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
 import { capStopLoss, stopWasCapped, takeProfitLevels, tp1FloorDistance, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
 import { estimatedRoundTripCostPct } from './intradayRisk';
-import { CALM_SL_PCT, CALM_TP2_PCT, isCalmRegime, resolveCalmTp1Percent } from './calmRegime';
+import { resolveLadderPercents, isBuyingSurge } from './calmRegime';
 
 // ── Parameters (all configurable — no auto-optimisation) ────────────────────
 
@@ -62,10 +62,11 @@ export interface Prev4hRangeParams {
   maxExtensionRangeMult: number;
   /** Minimum gross risk:reward ratio required to enter. */
   minRR: number;
-  /** Opt-in (default off — sim only, see server/pathSimEngine.ts). In a quiet
-   *  market (this bot's own `mid`-stop < CALM_SL_THRESHOLD_PCT), standardizes
-   *  to a fixed SL 2.3% / TP1 1.8% / TP2 3.5% ladder instead of the range-
-   *  derived one. See calmRegime.ts. */
+  /** Opt-in (default off — sim only, see server/pathSimEngine.ts). Replaces the
+   *  range-derived ladder with a FIXED SL 2.3% / TP1 1.8% / TP2 3.5% one,
+   *  always. Only on a buying surge (H1 relVolume >= 2 and a green bar) does
+   *  the stop widen back to the `mid`-derived value, clamped to [2.3%, 4.2%].
+   *  See calmRegime.ts. */
   calmRegimeScalp?: boolean;
   /** Resting-limit discount from market, in units of the reference bar's RANGE.
    *  This bot computes no ATR — `range` IS its volatility scale (every level it
@@ -325,21 +326,23 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   let tp1Distance = Math.max(dynamicTp1Distance, minTp1Distance);
   let takeProfit2Distance = tp1Distance * 1.5;
 
-  // Calm-regime scalp (opt-in, sim only — operator request 2026-09-11). In a
-  // QUIET market (this bot's own `mid`-stop is tighter than
-  // CALM_SL_THRESHOLD_PCT), standardize to a fixed SL 2.3% / TP1 1.8% /
-  // TP2 3.5% ladder instead of the range-derived one — a WIDER stop and a
-  // TIGHTER first target, so small moves get taken instead of chased. A "big
-  // move" (the range-derived stop already >= 2.3%) is untouched. TP1's own
-  // R:R (1.8/2.3 = 0.78) is below minRR on purpose — a fast 50% partial, not
-  // the whole thesis; the RR gate below is measured to TP2 in this branch.
+  // Fixed scalp ladder (opt-in, sim only — operator decision 2026-09-11):
+  // SL 2.3% / TP1 1.8% / TP2 3.5% replaces the range-derived ladder outright.
+  // The ONE exception is a BUYING SURGE, where the stop widens to this bot's
+  // own `mid`-derived stop clamped to [2.3%, 4.2%]. TP1 stays 1.8% regardless,
+  // so its own R:R is deliberately poor and the `minRR` gate below is measured
+  // against TP2 — which scales with the stop so the gate stays satisfiable.
   const dynSlPct = (rUnit / entryRef) * 100;
-  const calmActive = p.calmRegimeScalp === true && isCalmRegime(dynSlPct);
+  const calmActive = p.calmRegimeScalp === true;
   if (calmActive) {
-    const calmSlDistance = entryRef * CALM_SL_PCT / 100;
-    stopLoss = isLong ? entryRef - calmSlDistance : entryRef + calmSlDistance;
-    tp1Distance = entryRef * resolveCalmTp1Percent((tp1Distance / entryRef) * 100) / 100;
-    takeProfit2Distance = entryRef * CALM_TP2_PCT / 100;
+    const ladder = resolveLadderPercents({
+      dynamicSlPct: dynSlPct,
+      buyingSurge: isBuyingSurge(h1)
+    });
+    const slDistance = entryRef * ladder.slPct / 100;
+    stopLoss = isLong ? entryRef - slDistance : entryRef + slDistance;
+    tp1Distance = entryRef * ladder.tp1Pct / 100;
+    takeProfit2Distance = entryRef * ladder.tp2Pct / 100;
   }
 
   const riskPerUnit = Math.abs(entryRef - stopLoss);

@@ -78,7 +78,7 @@ import {
 import { calculateMACD, calculateStochastic } from '../utils/advancedTechnicalAnalysis';
 import type { HistoricalPrice, TechnicalIndicators } from '../types/crypto';
 import { positionPnlPercent, reachedStop, reachedTarget, TP2_PERCENT, TP1_EXIT_FRACTION } from './exitPolicy';
-import { CALM_SL_PCT, CALM_TP2_PCT, isCalmRegime, resolveCalmTp1Percent } from './calmRegime';
+import { resolveLadderPercents } from './calmRegime';
 
 // ── §2 — indicator votes ─────────────────────────────────────────────────────
 
@@ -479,7 +479,43 @@ export function proTechnicalScore(result: ProSignalResult): number {
  *   - Volume Profile POC: 10% (point of control)
  *   - Current price with 1% discount: 10% (slight pullback)
  */
-export function calculateOptimalEntryPrice(signal: ProSignalResult, currentPrice: number): number {
+/**
+ * Hard ceiling on how far below market a Pro LIMIT entry may rest, in percent.
+ *
+ * The support-weighted price below answers "where is the nearest strong
+ * support?" — a question with no connection to the trade's own risk budget. The
+ * old floor was `currentPrice × 0.90`, i.e. up to 10% below market. Observed
+ * live on NEAR: market $2.4540, planned entry $2.2902 — **-6.67%** — on a bot
+ * whose ladder targets TP1 1.8% / SL 2.3%. Waiting for a 6.67% drop to open a
+ * trade that intends to capture 1.8% is asking for a bigger move BEFORE the
+ * trade than the trade itself wants; in practice the order just expires at the
+ * 2h TTL and the bot never trades.
+ */
+export const PRO_MAX_ENTRY_DISCOUNT_PCT = 1.0;
+/**
+ * ...and the discount also may not exceed this fraction of the trade's OWN stop
+ * distance, so it scales with the ladder instead of being a magic number:
+ * a calm-regime 2.3% stop allows 0.69%, a wide 4.2% stop allows 1.26% → clamped
+ * by PRO_MAX_ENTRY_DISCOUNT_PCT to 1.0%. An entry discount comparable to the
+ * stop is not a better fill, it is a different trade.
+ */
+export const PRO_ENTRY_DISCOUNT_STOP_FRACTION = 0.30;
+
+/** The discount ceiling for a given stop distance — the two rules above, combined. */
+export function proMaxEntryDiscountPercent(stopPercent: number | undefined): number {
+  const byStop = typeof stopPercent === 'number' && Number.isFinite(stopPercent) && stopPercent > 0
+    ? stopPercent * PRO_ENTRY_DISCOUNT_STOP_FRACTION
+    : PRO_MAX_ENTRY_DISCOUNT_PCT;
+  return Math.min(PRO_MAX_ENTRY_DISCOUNT_PCT, byStop);
+}
+
+export function calculateOptimalEntryPrice(
+  signal: ProSignalResult,
+  currentPrice: number,
+  /** Ceiling on the distance from market, in percent. Defaults to the absolute
+   *  cap; the sim passes the stop-derived value from `proMaxEntryDiscountPercent`. */
+  opts: { maxDiscountPercent?: number } = {}
+): number {
   const { bollingerBands, volumeProfile, ma20 } = signal.indicators;
 
   const supportLevels: { price: number; weight: number }[] = [];
@@ -513,15 +549,22 @@ export function calculateOptimalEntryPrice(signal: ProSignalResult, currentPrice
 
   const weightedPrice = supportLevels.reduce((sum, s) => sum + s.price * s.weight, 0) / totalWeight;
 
-  // Cap at current price (we don't want to buy above market on entry)
-  // and floor at 90% of current price (don't wait for too big a drop).
+  // Cap at current price (we don't want to buy above market on entry) and floor
+  // at the DISCOUNT CEILING — see PRO_MAX_ENTRY_DISCOUNT_PCT. This used to be a
+  // flat `currentPrice × 0.90` (up to 10% away), which let the support-weighted
+  // price park the order far outside anything the 2h TTL could fill.
   // Rounded to the asset's own price scale (roundToPriceScale), not a flat 2
   // decimals — see its doc comment for the SKR case that flat rounding broke:
   // a $0.02 coin has no meaningful "cents", so .toFixed(2) collapsed the
   // support-weighted level to whichever of {0.01, 0.02, 0.03} it landed
   // nearest, on the wrong side of the market often enough that the resting
   // LIMIT order never crossed.
-  const capped = Math.min(currentPrice, Math.max(currentPrice * 0.90, weightedPrice));
+  const maxDiscount = Math.max(0, opts.maxDiscountPercent ?? PRO_MAX_ENTRY_DISCOUNT_PCT) / 100;
+  const floorPrice = currentPrice * (1 - maxDiscount);
+  const ceilPrice = currentPrice * (1 + maxDiscount);
+  const capped = signal.action === 'BUY'
+    ? Math.min(currentPrice, Math.max(floorPrice, weightedPrice))
+    : Math.max(currentPrice, Math.min(ceilPrice, weightedPrice));
   // LIMIT orders for LONG must sit BELOW current price — otherwise they fill
   // immediately as market orders, defeating the purpose of resting.
   const limitPrice = signal.action === 'BUY'
@@ -599,23 +642,27 @@ export function proStopTpLevels(
   entryPrice: number,
   atrPercent: number,
   isLong: boolean,
-  /** Opt-in (default off — sim only, see proSimExecution.ts). In a quiet
-   *  market (dynamic stop < CALM_SL_THRESHOLD_PCT), standardizes to a fixed
-   *  SL 2.3% / TP1 1.8% / TP2 3.5% ladder. See calmRegime.ts. */
-  opts: { calmRegimeScalp?: boolean } = {}
+  /** Opt-in (default off — sim only, see proSimExecution.ts). `calmRegimeScalp`
+   *  replaces the ATR ladder with a FIXED SL 2.3% / TP1 1.8% / TP2 3.5% one,
+   *  always; `buyingSurge` (relVolume >= 2 + green bar) is the ONE exception,
+   *  widening the stop back to the ATR value clamped to [2.3%, 4.2%].
+   *  See calmRegime.ts. */
+  opts: { calmRegimeScalp?: boolean; buyingSurge?: boolean } = {}
 ): { stopLoss: number; takeProfit1: number; takeProfit2: number } {
   const stopPct = Math.min(PRO_STOP_LOSS_PERCENT, Math.max(PRO_STOP_MIN_PERCENT, atrPercent * PRO_STOP_ATR_MULT));
   let tp1Pct = Math.max(1.5, stopPct * 1.5);
   let tp2Pct = tp1Pct * 1.5;
   let finalStopPct = stopPct;
-  // TP1's own R:R (1.8/2.3 = 0.78) is deliberately below the usual ~1.5 —
-  // it's a fast 50% partial, not the whole thesis. Pro carries no R:R reject
-  // gate, so there is nothing else to reconcile here (unlike Intraday/Path/
-  // Bybit, whose R:R gates are re-pointed at TP2 for this branch).
-  if (opts.calmRegimeScalp === true && isCalmRegime(stopPct)) {
-    finalStopPct = CALM_SL_PCT;
-    tp1Pct = resolveCalmTp1Percent(tp1Pct);
-    tp2Pct = CALM_TP2_PCT;
+  // The fixed scalp ladder replaces the ATR ladder outright; only a BUYING
+  // SURGE widens the stop, to this bot's own ATR stop. TP1's own R:R is
+  // deliberately poor — it is a fast 50% partial, not the whole thesis. Pro
+  // carries no R:R reject gate, so there is nothing to reconcile here (unlike
+  // Intraday/Path/Bybit, whose gates are re-pointed at TP2).
+  if (opts.calmRegimeScalp === true) {
+    const ladder = resolveLadderPercents({ dynamicSlPct: stopPct, buyingSurge: opts.buyingSurge });
+    finalStopPct = ladder.slPct;
+    tp1Pct = ladder.tp1Pct;
+    tp2Pct = ladder.tp2Pct;
   }
   const s = isLong ? 1 : -1;
   return {

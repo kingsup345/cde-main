@@ -23,7 +23,7 @@ import {
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
 import { capStopLoss, stopWasCapped, takeProfitLevels, tp1FloorDistance, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
-import { CALM_SL_PCT, CALM_TP2_PCT, isCalmRegime, resolveCalmTp1Percent } from './calmRegime';
+import { resolveLadderPercents, isBuyingSurge } from './calmRegime';
 
 // ── Parameters (spec §23 — every knob configurable, no auto-optimisation) ────
 
@@ -49,10 +49,11 @@ export interface TrendBreakoutParams {
    *  the SIGNAL is refused with RR_TOO_LOW instead of opening. Matches the
    *  minRewardRisk gate the other three sim bots carry. */
   minRewardRisk: number;
-  /** Opt-in (default off — sim only, see server/bybitSimEngine.ts). In a quiet
-   *  market (this bot's own ATR-derived stop < CALM_SL_THRESHOLD_PCT),
-   *  standardizes to a fixed SL 2.3% / TP1 1.8% / TP2 3.5% ladder instead of
-   *  the ATR-derived one. See calmRegime.ts. */
+  /** Opt-in (default off — sim only, see server/bybitSimEngine.ts). Replaces the
+   *  ATR-derived ladder with a FIXED SL 2.3% / TP1 1.8% / TP2 3.5% one, always.
+   *  Only on a buying surge (M15 relVolume >= 2 and a green bar) does the stop
+   *  widen back to the ATR-derived value, clamped to [2.3%, 4.2%].
+   *  See calmRegime.ts. */
   calmRegimeScalp?: boolean;
   /** Risk budget for the FULL position, as a fraction of equity.
    *  Deprecated: position sizing now uses positionTargetPct (10% of equity).
@@ -396,23 +397,24 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
   let tp1Distance = Math.max(atrTp1Distance, minTp1Distance);
   let takeProfit2Distance = tp1Distance * 1.5;
 
-  // Calm-regime scalp (opt-in, sim only — operator request 2026-09-11). In a
-  // QUIET market (this bot's own ATR-derived stop is tighter than
-  // CALM_SL_THRESHOLD_PCT), standardize to a fixed SL 2.3% / TP1 1.8% /
-  // TP2 3.5% ladder — a WIDER stop and a TIGHTER first target than the ATR
-  // formula, so small moves get taken instead of chased. A "big move" (the
-  // ATR-derived stop already >= 2.3%) is untouched — and since this bot only
-  // trades a CONFIRMED strong trend, ATR(M15) is usually already elevated by
-  // the time it fires, so this branch is expected to bind less often here
-  // than on the other three bots. TP1's own R:R (1.8/2.3 = 0.78) is below
-  // minRewardRisk on purpose; the gate below is measured to TP2 in this branch.
+  // Fixed scalp ladder (opt-in, sim only — operator decision 2026-09-11):
+  // SL 2.3% / TP1 1.8% / TP2 3.5% replaces the ATR ladder outright. The ONE
+  // exception is a BUYING SURGE, where the stop widens to this bot's own
+  // ATR(M15)-derived stop clamped to [2.3%, 4.2%]. Measured on M15 — the frame
+  // the breakout itself is confirmed on. TP1 stays 1.8% regardless, so its own
+  // R:R is deliberately poor and the gate below is measured against TP2, which
+  // scales with the stop so it stays satisfiable.
   const dynSlPct = (cappedR / entryRef) * 100;
-  const calmActive = p.calmRegimeScalp === true && isCalmRegime(dynSlPct);
+  const calmActive = p.calmRegimeScalp === true;
   if (calmActive) {
-    const calmSlDistance = entryRef * CALM_SL_PCT / 100;
-    stopLoss = isLong ? entryRef - calmSlDistance : entryRef + calmSlDistance;
-    tp1Distance = entryRef * resolveCalmTp1Percent((tp1Distance / entryRef) * 100) / 100;
-    takeProfit2Distance = entryRef * CALM_TP2_PCT / 100;
+    const ladder = resolveLadderPercents({
+      dynamicSlPct: dynSlPct,
+      buyingSurge: isBuyingSurge(m15)
+    });
+    const slDistance = entryRef * ladder.slPct / 100;
+    stopLoss = isLong ? entryRef - slDistance : entryRef + slDistance;
+    tp1Distance = entryRef * ladder.tp1Pct / 100;
+    takeProfit2Distance = entryRef * ladder.tp2Pct / 100;
   }
 
   const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;
