@@ -23,6 +23,7 @@ import {
 import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
 import { capStopLoss, stopWasCapped, takeProfitLevels, tp1FloorDistance, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
+import { CALM_SL_PCT, CALM_TP2_PCT, isCalmRegime, resolveCalmTp1Percent } from './calmRegime';
 
 // ── Parameters (spec §23 — every knob configurable, no auto-optimisation) ────
 
@@ -48,6 +49,11 @@ export interface TrendBreakoutParams {
    *  the SIGNAL is refused with RR_TOO_LOW instead of opening. Matches the
    *  minRewardRisk gate the other three sim bots carry. */
   minRewardRisk: number;
+  /** Opt-in (default off — sim only, see server/bybitSimEngine.ts). In a quiet
+   *  market (this bot's own ATR-derived stop < CALM_SL_THRESHOLD_PCT),
+   *  standardizes to a fixed SL 2.3% / TP1 1.8% / TP2 3.5% ladder instead of
+   *  the ATR-derived one. See calmRegime.ts. */
+  calmRegimeScalp?: boolean;
   /** Risk budget for the FULL position, as a fraction of equity.
    *  Deprecated: position sizing now uses positionTargetPct (10% of equity).
    *  Kept for API stability — do not use for sizing. */
@@ -372,7 +378,7 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
   // untouched.
   const rUnit = p.slAtrMultiplier * atrM15;
   const structuralStop = isLong ? entryRef - rUnit : entryRef + rUnit;
-  const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
+  let stopLoss = capStopLoss(entryRef, structuralStop, isLong);
   const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
   // TP1 = max(2R target, the shared floor). The floor is tp1FloorDistance =
   // max(1.5% of entry, 1.5× the capped stop) — not a flat 3%, which is
@@ -387,17 +393,40 @@ export function evaluateTrendBreakout(input: TrendBreakoutInput): SignalEvaluati
   const cappedR = Math.abs(entryRef - stopLoss);
   const minTp1Distance = tp1FloorDistance(entryRef, cappedR);
   const atrTp1Distance = cappedR * p.tpRMultiplier;
-  const tp1Distance = Math.max(atrTp1Distance, minTp1Distance);
+  let tp1Distance = Math.max(atrTp1Distance, minTp1Distance);
+  let takeProfit2Distance = tp1Distance * 1.5;
+
+  // Calm-regime scalp (opt-in, sim only — operator request 2026-09-11). In a
+  // QUIET market (this bot's own ATR-derived stop is tighter than
+  // CALM_SL_THRESHOLD_PCT), standardize to a fixed SL 2.3% / TP1 1.8% /
+  // TP2 3.5% ladder — a WIDER stop and a TIGHTER first target than the ATR
+  // formula, so small moves get taken instead of chased. A "big move" (the
+  // ATR-derived stop already >= 2.3%) is untouched — and since this bot only
+  // trades a CONFIRMED strong trend, ATR(M15) is usually already elevated by
+  // the time it fires, so this branch is expected to bind less often here
+  // than on the other three bots. TP1's own R:R (1.8/2.3 = 0.78) is below
+  // minRewardRisk on purpose; the gate below is measured to TP2 in this branch.
+  const dynSlPct = (cappedR / entryRef) * 100;
+  const calmActive = p.calmRegimeScalp === true && isCalmRegime(dynSlPct);
+  if (calmActive) {
+    const calmSlDistance = entryRef * CALM_SL_PCT / 100;
+    stopLoss = isLong ? entryRef - calmSlDistance : entryRef + calmSlDistance;
+    tp1Distance = entryRef * resolveCalmTp1Percent((tp1Distance / entryRef) * 100) / 100;
+    takeProfit2Distance = entryRef * CALM_TP2_PCT / 100;
+  }
+
   const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;
-  const takeProfit2 = isLong ? entryRef + tp1Distance * 1.5 : entryRef - tp1Distance * 1.5;
+  const takeProfit2 = isLong ? entryRef + takeProfit2Distance : entryRef - takeProfit2Distance;
   const takeProfit = takeProfit1;
 
   // R:R backstop (spec §10) — refuse an inverted trade before it can open, the
   // same gate intraday's buildRiskPlan and prev4hRange already enforce. The TP
   // formula above keeps grossRR >= tpRMultiplier, so this only fires if a
-  // future edit breaks that; a named refusal beats a silent bad entry.
-  const grossRewardRisk = Math.abs(entryRef - stopLoss) > 0
-    ? Math.abs(takeProfit1 - entryRef) / Math.abs(entryRef - stopLoss)
+  // future edit breaks that; a named refusal beats a silent bad entry. In the
+  // calm branch the gate is measured against TP2 (the runner), not TP1.
+  const riskDistance = Math.abs(entryRef - stopLoss);
+  const grossRewardRisk = riskDistance > 0
+    ? Math.abs((calmActive ? takeProfit2 : takeProfit1) - entryRef) / riskDistance
     : 0;
   if (grossRewardRisk < p.minRewardRisk) {
     return base('SETUP', 'RR_TOO_LOW', {}, [

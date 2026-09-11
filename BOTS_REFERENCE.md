@@ -430,6 +430,21 @@ SCALE_3 רק מעל **+1.5R** + Supertrend עדיין בכיוון (הועבר �
 | Fill/Fee/Slippage/Funding | מנוע אחד | `simExecution.ts` |
 | שער קורלציה | ρ ≥ 0.7 על 72 נרות H1, מקס' 3 | `correlation.ts` — Intraday · Path · Bybit (**לא** Pro) |
 | רצפת גודל בפחד (opt-in) | F&G 20–35 + MEAN_REVERSION BUY → מכפיל ≥ 0.9 | `simExecution.ts` — **Intraday בלבד** |
+| מדרגת Scalp רגוע (opt-in) | dynSl<2.3% → SL 2.3/TP1≤1.8/TP2 3.5, R:R מול TP2 | `calmRegime.ts` — **כל 4 הבוטים** |
+
+### מדרגת Scalp רגוע — `calmRegimeScalp` (2026-09-11, כבוי כברירת מחדל)
+בקשת מפעיל: בשוק **רגוע** (הסטופ הדינמי של הבוט עצמו < 2.3%) לסחור מדרגה
+קבועה — SL 2.3% / TP1 ≤1.8% (50%, לעולם לא מרחיב את היעד הדינמי) / TP2 3.5%
+— במקום המדרגה הדינמית הרגילה. ב-**תנועה גדולה** (הסטופ הדינמי כבר ≥ 2.3%)
+אין שינוי. TP1 ביחס-סיכון 0.78 מתחת ל-`minRewardRisk` **בכוונה** — פרטיישל
+מהיר, לא כל התזה; שער ה-R:R בענף הזה נמדד מול **TP2** (3.5/2.3=1.52), לא TP1.
+Intraday (`intradayRisk.ts`) / Path (`prev4hRange.ts`) / Bybit (`trendBreakout.ts`)
+משתמשים בשער R:R הקיים שלהם, מוסט ל-TP2. Pro (`proStopTpLevels`) אין לו שער
+R:R — רק המדרגה עצמה משתנה. הזרקה: `SIM_INTRADAY_PARAMS_OVERRIDE` (Intraday),
+`opts` ל-`proStopTpLevels` (Pro), `overrideParams` ב-`pathSimEngine.ts` /
+`bybitSimEngine.ts`. LIVE (`DEFAULT_INTRADAY_PARAMS`) לא מגדיר את הדגל — ללא
+שינוי. Bybit צפוי להיכנס לענף הרגוע פחות משלושת האחרים — הוא סוחר רק מגמה
+מאושרת, ולכן ה-ATR שלו בד"כ כבר גבוה כשהוא נכנס בכלל.
 
 ### רצפת גודל בפחד שוק — `fearGreedSizeBoost` (2026-09-10, כבוי כברירת מחדל)
 כש-`fearGreedSizeBoost=true` ומדד הפחד ב-`[20,35]` ("פחד, לא קפיטולציה")

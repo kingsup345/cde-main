@@ -96,7 +96,9 @@ export function buildProEvaluation(
   // ATR-scaled stop + stop-relative TP ladder, as absolute prices off the
   // signal price. fillDueOrders reanchors them to the actual fill, preserving
   // the % distances. Spot is LONG only.
-  const levels = proStopTpLevels(currentPrice, signal.atrPercent, true);
+  // Calm-regime scalp (2026-09-11, operator request, sim only): see
+  // calmRegime.ts / proStopTpLevels for the full rationale.
+  const levels = proStopTpLevels(currentPrice, signal.atrPercent, true, { calmRegimeScalp: true });
 
   return {
     symbol,

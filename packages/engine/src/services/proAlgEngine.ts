@@ -78,6 +78,7 @@ import {
 import { calculateMACD, calculateStochastic } from '../utils/advancedTechnicalAnalysis';
 import type { HistoricalPrice, TechnicalIndicators } from '../types/crypto';
 import { positionPnlPercent, reachedStop, reachedTarget, TP2_PERCENT, TP1_EXIT_FRACTION } from './exitPolicy';
+import { CALM_SL_PCT, CALM_TP2_PCT, isCalmRegime, resolveCalmTp1Percent } from './calmRegime';
 
 // ── §2 — indicator votes ─────────────────────────────────────────────────────
 
@@ -597,14 +598,28 @@ export const PRO_STOP_MIN_PERCENT = 1.8;
 export function proStopTpLevels(
   entryPrice: number,
   atrPercent: number,
-  isLong: boolean
+  isLong: boolean,
+  /** Opt-in (default off — sim only, see proSimExecution.ts). In a quiet
+   *  market (dynamic stop < CALM_SL_THRESHOLD_PCT), standardizes to a fixed
+   *  SL 2.3% / TP1 1.8% / TP2 3.5% ladder. See calmRegime.ts. */
+  opts: { calmRegimeScalp?: boolean } = {}
 ): { stopLoss: number; takeProfit1: number; takeProfit2: number } {
   const stopPct = Math.min(PRO_STOP_LOSS_PERCENT, Math.max(PRO_STOP_MIN_PERCENT, atrPercent * PRO_STOP_ATR_MULT));
-  const tp1Pct = Math.max(1.5, stopPct * 1.5);
-  const tp2Pct = tp1Pct * 1.5;
+  let tp1Pct = Math.max(1.5, stopPct * 1.5);
+  let tp2Pct = tp1Pct * 1.5;
+  let finalStopPct = stopPct;
+  // TP1's own R:R (1.8/2.3 = 0.78) is deliberately below the usual ~1.5 —
+  // it's a fast 50% partial, not the whole thesis. Pro carries no R:R reject
+  // gate, so there is nothing else to reconcile here (unlike Intraday/Path/
+  // Bybit, whose R:R gates are re-pointed at TP2 for this branch).
+  if (opts.calmRegimeScalp === true && isCalmRegime(stopPct)) {
+    finalStopPct = CALM_SL_PCT;
+    tp1Pct = resolveCalmTp1Percent(tp1Pct);
+    tp2Pct = CALM_TP2_PCT;
+  }
   const s = isLong ? 1 : -1;
   return {
-    stopLoss: Math.max(entryPrice * (1 - s * stopPct / 100), 1e-8),
+    stopLoss: Math.max(entryPrice * (1 - s * finalStopPct / 100), 1e-8),
     takeProfit1: Math.max(entryPrice * (1 + s * tp1Pct / 100), 1e-8),
     takeProfit2: Math.max(entryPrice * (1 + s * tp2Pct / 100), 1e-8)
   };

@@ -12,6 +12,7 @@ import ProfitScale from './ProfitScale';
 import LivePositionChart from './LivePositionChart';
 import type { CryptoData } from '@cde/engine';
 import type { SimBotConfig, SimPosition, SimTrade, SimPoint, PendingOrder, SignalEvaluation, DecisionFactor } from '@/hooks/useSimulationBot';
+import { tallyExitReasons } from '@/lib/botCsvExport';
 
 const safeNumber = (value: unknown, fallback = 0): number => {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -85,6 +86,12 @@ export default function SimulationEngineColumn({
   status, isRunning, start, pause, resetAll, confidenceKind = 'score'
 }: EngineColumnProps) {
   const isProbability = confidenceKind === 'probability';
+  // Exit-reason buckets that actually occurred, worst-P&L first — the same
+  // classifier the CSV export uses, so the panel and the file always agree.
+  const exitBreakdown = useMemo(
+    () => tallyExitReasons(trades).filter((r) => r.count > 0).sort((a, b) => a.pnl - b.pnl),
+    [trades]
+  );
   const [openLogs, setOpenLogs] = useState<string[]>([]);
   // null = no schedule known yet; 0 = the tick is overdue (server is still
   // working on it). Anything > 0 is a real number of seconds.
@@ -630,6 +637,27 @@ export default function SimulationEngineColumn({
                 <div className="text-muted-foreground text-xs text-center font-mono h-[26rem] flex items-center justify-center">אין עסקאות עדיין</div>
               ) : (
                 <div className="space-y-2 h-[26rem] overflow-y-auto font-mono pr-1">
+                  {/* Why the bot actually exits — the single most diagnostic
+                      view of a losing run. Count + summed P&L per bucket, so a
+                      stop-dominated book is visible without reading every row. */}
+                  {exitBreakdown.length > 0 && (
+                    <div className="p-2 border border-border/40 rounded bg-muted/20 sticky top-0 z-10 backdrop-blur">
+                      <div className="text-[11px] font-bold mb-1.5">סיבות יציאה ({exitBreakdown.reduce((s, r) => s + r.count, 0)} יציאות)</div>
+                      <div className="space-y-1">
+                        {exitBreakdown.map((r) => (
+                          <div key={r.key} className="flex items-center justify-between gap-2 text-[10px]">
+                            <span className="text-muted-foreground">{r.key}</span>
+                            <span className="flex items-center gap-2">
+                              <Badge variant="outline" className="text-[9px] px-1 py-0">{r.count}</Badge>
+                              <span className={`font-bold tabular-nums ${r.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {r.pnl >= 0 ? '+' : ''}${r.pnl.toFixed(2)}
+                              </span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {trades.map((trade) => (
                     <div key={trade.id} className="p-2 border border-border/30 rounded bg-card/30">
                       {(() => {
@@ -658,7 +686,10 @@ export default function SimulationEngineColumn({
                           )}
                         </div>
                       </div>
-                      <div className="text-[10px] text-muted-foreground mt-1 truncate">{trade.reason}</div>
+                      {/* NOT truncated: the exit reason is the whole point of
+                          the log — it carries the level that fired, the R
+                          progress and the gate name. One line hid all of it. */}
+                      <div className="text-[10px] text-muted-foreground mt-1 whitespace-pre-wrap break-words">{trade.reason}</div>
                       </>;
                     })()}
                     </div>

@@ -82,6 +82,12 @@ export const SIM_INTRADAY_PARAMS_OVERRIDE: Partial<IntradayParams> = {
   // the 50% runner can actually reach the 2nd target instead of trailing out
   // near +0.4R; a 2.2R target that prints beats a 2.5R target that does not.
   tp2RewardRisk: 2.2,
+  // Calm-regime scalp (2026-09-11, operator request): in a quiet market
+  // (dynamic stop < 2.3%), trade a fixed SL 2.3% / TP1 1.8% / TP2 3.5% ladder
+  // instead of the usual dynamic one, so small moves get taken instead of
+  // chased. A "big move" (dynamic stop already >= 2.3%) is untouched. See
+  // calmRegime.ts. Sim only — DEFAULT_INTRADAY_PARAMS leaves this unset.
+  calmRegimeScalp: true,
   // Operator floor: no sim position opens below $100. Per the 10% target model,
   // a budget below MIN_SIM_ENTRY_USD is SKIPPED — never bumped up.
   // This override makes buildRiskPlan enforce the same floor.

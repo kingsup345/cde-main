@@ -97,6 +97,11 @@ export interface IntradayParams {
   /** Base slippage assumption in percent, before spread/volatility adjustment */
   baseSlippagePercent: number;
   minRewardRisk: number;
+  /** Opt-in (default off — see `SIM_INTRADAY_PARAMS_OVERRIDE`, sim only).
+   *  In a quiet market (this bot's own dynamic stop < CALM_SL_THRESHOLD_PCT),
+   *  standardizes to a fixed SL 2.3% / TP1 1.8% / TP2 3.5% ladder instead of
+   *  the usual dynamic one. See `calmRegime.ts` for the full rationale. */
+  calmRegimeScalp?: boolean;
   /** The stop distance must be at least this multiple of the modelled
    *  round-trip cost, or the trade is rejected (DecisionGate 'RISK_VS_COST').
    *  minRewardRisk guards the REWARD side; this guards the RISK side, which

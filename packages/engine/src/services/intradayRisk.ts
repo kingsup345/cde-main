@@ -9,6 +9,7 @@ import { BYBIT_FEES } from './tradeEngine';
 import { clamp } from './intradayIndicators';
 import { DEFAULT_INTRADAY_PARAMS, Direction, IntradayParams, SetupType, PER_ASSET_EXPOSURE_CAP_PERCENT, resolveSizingBase } from './intradayParams';
 import { MAX_LOSS_PERCENT, TP1_EXIT_FRACTION, tp1FloorDistance } from './exitPolicy';
+import { CALM_SL_PCT, CALM_TP2_PCT, isCalmRegime, resolveCalmTp1Percent } from './calmRegime';
 
 export interface CostAnalysis {
   // ── The exact levels this analysis was computed on ────────────────────────
@@ -431,7 +432,7 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   // Hard 4.2% cap — never exceed
   slDistancePct = Math.min(slDistancePct, MAX_LOSS_PERCENT);
 
-  const slDistance = entry * slDistancePct / 100;
+  let slDistance = entry * slDistancePct / 100;
 
   // ── Dynamic TP computation ─────────────────────────────────────────────
   // TP = f(ATR, structure, minimum_reward). TP2 scales from TP1 by
@@ -460,10 +461,32 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   // also carry the stop-relative floor via minTp1Distance.
   let tp1Distance = Math.max(atrTp1Distance, structureTp1Distance ?? 0, minTp1Distance);
 
+  // ── Calm-regime scalp (opt-in, sim only via SIM_INTRADAY_PARAMS_OVERRIDE) ──
+  // Operator request (2026-09-11): in a QUIET market (this bot's own dynamic
+  // stop is tighter than CALM_SL_THRESHOLD_PCT), standardize to a fixed
+  // SL 2.3% / TP1 1.8% / TP2 3.5% ladder instead of the usual dynamic one — a
+  // WIDER stop and a TIGHTER first target than the default, so small moves get
+  // taken instead of chased. A "big move" (dynamic stop already ≥ 2.3%) is
+  // untouched. TP1's own R:R (1.8/2.3 = 0.78) is BELOW minRewardRisk on
+  // purpose — it is a fast 50% partial, not the trade's whole thesis; the R:R
+  // gate below is measured to TP2 (3.5/2.3 = 1.52) in this branch instead.
+  // `resolveCalmTp1Percent` never WIDENS the target — MEAN_REVERSION's
+  // VWAP-driven TP1 can already be tighter than 1.8%, and calm-regime must
+  // never make a target harder to reach.
+  const calmActive = params.calmRegimeScalp === true && isCalmRegime(slDistancePct);
+  let calmTp2Distance: number | undefined;
+  if (calmActive) {
+    slDistancePct = CALM_SL_PCT;
+    slDistance = entry * slDistancePct / 100;
+    tp1Distance = entry * resolveCalmTp1Percent((tp1Distance / entry) * 100) / 100;
+    calmTp2Distance = entry * CALM_TP2_PCT / 100;
+  }
+
   // ── TP impossible gate ──────────────────────────────────────────────────
   // If the dynamic SL makes it impossible to achieve a reasonable R:R, reject
-  // the trade. No artificial SL widening or TP shrinking.
-  const grossRR = tp1Distance / slDistance;
+  // the trade. No artificial SL widening or TP shrinking. In the calm branch
+  // the gate is measured against TP2 (the runner), not the fast TP1 partial.
+  const grossRR = (calmActive ? calmTp2Distance! : tp1Distance) / slDistance;
   if (grossRR < params.minRewardRisk) {
     return rejected(`R:R נטו ${grossRR.toFixed(2)} מתחת לסף ${params.minRewardRisk} (SL=${slDistancePct.toFixed(2)}%, TP=${(tp1Distance/entry*100).toFixed(2)}%) — NO TRADE`);
   }
@@ -477,11 +500,11 @@ export function buildRiskPlan(input: RiskPlanInput): RiskPlan {
   if (input.tradeType === 'SPOT' || isLong) {
     stopLoss = Math.max(0.00000001, entry - slDistance);
     takeProfit1 = entry + tp1Distance;
-    takeProfit2 = entry + tp1Distance * (params.tp2RewardRisk / params.tp1RewardRisk);
+    takeProfit2 = entry + (calmActive ? calmTp2Distance! : tp1Distance * (params.tp2RewardRisk / params.tp1RewardRisk));
   } else {
     stopLoss = entry + slDistance;
     takeProfit1 = Math.max(0.00000001, entry - tp1Distance);
-    takeProfit2 = Math.max(0.00000001, entry - tp1Distance * (params.tp2RewardRisk / params.tp1RewardRisk));
+    takeProfit2 = Math.max(0.00000001, entry - (calmActive ? calmTp2Distance! : tp1Distance * (params.tp2RewardRisk / params.tp1RewardRisk)));
   }
 
   // Direction check (§3 step 3) — ONE authoritative validator for SL AND TP1

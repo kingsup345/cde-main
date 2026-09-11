@@ -2,7 +2,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useState } from 'react';
-import { Bot, RefreshCw, AlertTriangle, Trash2, ExternalLink, Play, Pause, Square } from 'lucide-react';
+import { Bot, RefreshCw, AlertTriangle, Trash2, ExternalLink, Play, Pause, Square, Download } from 'lucide-react';
 import Navigation from '../components/Navigation';
 import PortfolioRiskMeter from '../components/trading/PortfolioRiskMeter';
 import SimulationEngineColumn from '../components/trading/SimulationEngineColumn';
@@ -19,6 +19,7 @@ import { useBybitSimulationBotContext } from '../contexts/BybitSimulationBotCont
 // settings overrides it; the risk table stays exported as reference.
 import { PRO_ENTRY_ALLOCATION_PERCENT, PRO_DEFAULT_ENTRY_CONFIDENCE, PRO_STOP_LOSS_PERCENT, PRO_TAKE_PROFIT_PERCENT } from '@cde/engine/analysis';
 import { SIM_CACHE_KEYS, toAggregated, combineRisk, groupAction, type AggregatedBot } from '../lib/botAggregation';
+import { buildBotComparisonCsv, buildTradeLogCsv, csvFilename, downloadCsv, type CsvBot } from '../lib/botCsvExport';
 import { clearBacktestArchive } from '../services/tradingApiClient';
 
 const SimulationBotPage = () => {
@@ -86,6 +87,31 @@ const SimulationBotPage = () => {
     { key: 'path', label: 'נתיב 4H', ctx: path, accent: 'text-violet-400', ring: 'border-violet-400/30', serverOnly: true },
     { key: 'bybit', label: 'Bybit', ctx: bybit, accent: 'text-cyan-400', ring: 'border-cyan-400/30', serverOnly: true }
   ];
+
+  // What the two CSV exports read. Deliberately built from the SAME four
+  // contexts the columns render from, so an exported row can never disagree
+  // with what is on screen.
+  const csvBots: CsvBot[] = [
+    { label: 'מנוע חדש', ...intraday },
+    { label: 'פרו', ...pro },
+    { label: 'נתיב 4H', ...path },
+    { label: 'Bybit', ...bybit }
+  ].map((b) => ({
+    label: b.label,
+    isRunning: b.isRunning,
+    equity: b.equity,
+    cash: b.cash,
+    positionsValue: b.positionsValue,
+    positions: b.positions,
+    trades: b.trades,
+    totalFees: b.totalFees,
+    totalSlippageCost: b.totalSlippageCost,
+    totalFunding: b.totalFunding,
+    winRate: b.winRate,
+    totalTrades: b.totalTrades,
+    closedTrades: b.closedTrades,
+    config: b.config
+  }));
 
   const runGroupAction = async (actions: Array<() => Promise<void>>) => {
     setGroupBusy(true);
@@ -195,6 +221,28 @@ const SimulationBotPage = () => {
             >
               <Trash2 className="w-4 h-4" />
               איפוס מטמון (מקומי + שרת)
+            </Button>
+            <div className="h-6 w-px bg-border mx-1 hidden sm:block" />
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => downloadCsv(csvFilename('bots-comparison'), buildBotComparisonCsv(csvBots))}
+              className="gap-2"
+              title="שורה לכל בוט: הון, רווח/הפסד, אחוז הצלחה, מודל העלות (עמלה/החלקה/לימיט) ופילוח סיבות יציאה"
+            >
+              <Download className="w-4 h-4" />
+              השוואת בוטים CSV
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => downloadCsv(csvFilename('bots-trades'), buildTradeLogCsv(csvBots))}
+              className="gap-2"
+              title="שורה לכל ביצוע בכל הבוטים, כולל סיבת היציאה המלאה"
+            >
+              <Download className="w-4 h-4" />
+              יומן עסקאות CSV
             </Button>
             <div className="h-6 w-px bg-border mx-1 hidden sm:block" />
 

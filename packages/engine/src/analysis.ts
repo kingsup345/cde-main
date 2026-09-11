@@ -68,6 +68,11 @@ export { evaluateCostEdge, buildRiskPlan, validateLevelDirection, FIXED_TP_PERCE
 export { MAX_LOSS_PERCENT, TP1_EXIT_FRACTION, weightedAverageExit, capStopLoss } from './services/exitPolicy';
 export type { ExitLevel } from './services/exitPolicy';
 
+export {
+  CALM_SL_PCT, CALM_TP1_PCT, CALM_TP2_PCT, CALM_SL_THRESHOLD_PCT,
+  isCalmRegime, resolveCalmTp1Percent
+} from './services/calmRegime';
+
 export type { ScoreContext } from './services/intradaySetupScores';
 export { scoreTrend, scoreMomentum, scoreLocation, scoreParticipation, scoreStructure, retracementAtr } from './services/intradaySetupScores';
 

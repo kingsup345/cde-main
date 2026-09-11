@@ -23,6 +23,7 @@ import type { SignalEvaluation, DecisionFactor } from './intradayBridge';
 import { POSITION_TARGET_PCT } from './intradayParams';
 import { capStopLoss, stopWasCapped, takeProfitLevels, tp1FloorDistance, MAX_LOSS_PERCENT, TP1_PERCENT, TP2_PERCENT } from './exitPolicy';
 import { estimatedRoundTripCostPct } from './intradayRisk';
+import { CALM_SL_PCT, CALM_TP2_PCT, isCalmRegime, resolveCalmTp1Percent } from './calmRegime';
 
 // ── Parameters (all configurable — no auto-optimisation) ────────────────────
 
@@ -61,6 +62,11 @@ export interface Prev4hRangeParams {
   maxExtensionRangeMult: number;
   /** Minimum gross risk:reward ratio required to enter. */
   minRR: number;
+  /** Opt-in (default off — sim only, see server/pathSimEngine.ts). In a quiet
+   *  market (this bot's own `mid`-stop < CALM_SL_THRESHOLD_PCT), standardizes
+   *  to a fixed SL 2.3% / TP1 1.8% / TP2 3.5% ladder instead of the range-
+   *  derived one. See calmRegime.ts. */
+  calmRegimeScalp?: boolean;
   /** Resting-limit discount from market, in units of the reference bar's RANGE.
    *  This bot computes no ATR — `range` IS its volatility scale (every level it
    *  uses is a multiple of it), and a 5-minute ATR would be the wrong scale for
@@ -307,9 +313,8 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   // it risks 4.2% or less. When the entry sits far enough above H that half the
   // range is a bigger loss than that, the shared cap pulls it in (operator
   // decision 2026-09-08) — the cap only ever REDUCES risk.
-  const stopLoss = capStopLoss(entryRef, structuralStop, isLong);
+  let stopLoss = capStopLoss(entryRef, structuralStop, isLong);
   const stopCapped = stopWasCapped(entryRef, structuralStop, isLong);
-  const riskPerUnit = Math.abs(entryRef - stopLoss);
   // TP1 = max(range-midpoint target, the shared floor). The floor is
   // tp1FloorDistance = max(1.5% of entry, 1.5× the stop) — not a flat 3%,
   // which a narrow prev-4H range can never reach in one 4H window. The `minRR`
@@ -317,19 +322,39 @@ export function evaluatePrev4hRange(input: Prev4hRangeInput): SignalEvaluation {
   const rUnit = Math.abs(entryRef - stopLoss);
   const minTp1Distance = tp1FloorDistance(entryRef, rUnit);
   const dynamicTp1Distance = rUnit * p.tpRangeMult;
-  const tp1Distance = Math.max(dynamicTp1Distance, minTp1Distance);
+  let tp1Distance = Math.max(dynamicTp1Distance, minTp1Distance);
+  let takeProfit2Distance = tp1Distance * 1.5;
+
+  // Calm-regime scalp (opt-in, sim only — operator request 2026-09-11). In a
+  // QUIET market (this bot's own `mid`-stop is tighter than
+  // CALM_SL_THRESHOLD_PCT), standardize to a fixed SL 2.3% / TP1 1.8% /
+  // TP2 3.5% ladder instead of the range-derived one — a WIDER stop and a
+  // TIGHTER first target, so small moves get taken instead of chased. A "big
+  // move" (the range-derived stop already >= 2.3%) is untouched. TP1's own
+  // R:R (1.8/2.3 = 0.78) is below minRR on purpose — a fast 50% partial, not
+  // the whole thesis; the RR gate below is measured to TP2 in this branch.
+  const dynSlPct = (rUnit / entryRef) * 100;
+  const calmActive = p.calmRegimeScalp === true && isCalmRegime(dynSlPct);
+  if (calmActive) {
+    const calmSlDistance = entryRef * CALM_SL_PCT / 100;
+    stopLoss = isLong ? entryRef - calmSlDistance : entryRef + calmSlDistance;
+    tp1Distance = entryRef * resolveCalmTp1Percent((tp1Distance / entryRef) * 100) / 100;
+    takeProfit2Distance = entryRef * CALM_TP2_PCT / 100;
+  }
+
+  const riskPerUnit = Math.abs(entryRef - stopLoss);
   const takeProfit1 = isLong ? entryRef + tp1Distance : entryRef - tp1Distance;
-  const takeProfit2 = isLong ? entryRef + tp1Distance * 1.5 : entryRef - tp1Distance * 1.5;
+  const takeProfit2 = isLong ? entryRef + takeProfit2Distance : entryRef - takeProfit2Distance;
   const takeProfit = takeProfit1;
   const tpCapped = false;
 
-  const actualRR = Math.abs(entryRef - stopLoss) > 0
-    ? Math.abs(takeProfit1 - entryRef) / Math.abs(entryRef - stopLoss)
-    : 0;
-
   // Reward:risk backstop — a wide range (mid-stop far from entry) can make even
   // the 3% TP floor a sub-1.2 R:R. Kept as the one hard reward-side gate; the
-  // frequency work elsewhere never touches this number.
+  // frequency work elsewhere never touches this number. In the calm branch the
+  // gate is measured against TP2 (the runner), not the fast TP1 partial.
+  const actualRR = riskPerUnit > 0
+    ? Math.abs((calmActive ? takeProfit2 : takeProfit1) - entryRef) / riskPerUnit
+    : 0;
   if (actualRR < p.minRR) {
     return base('ARMED', 'RR_BELOW_MIN', debug, { confidence: 0 });
   }

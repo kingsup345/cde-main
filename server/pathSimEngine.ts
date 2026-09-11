@@ -39,7 +39,9 @@ function overrideParams(input: StrategyTickInput) {
   const override = typeof input.config.minConfidenceOverride === 'number' && input.config.minConfidenceOverride > 0
     ? input.config.minConfidenceOverride
     : undefined;
-  return override ? { minConfidence: override } : {};
+  // Calm-regime scalp (2026-09-11, operator request, sim only): see
+  // calmRegime.ts / prev4hRange.ts for the full rationale.
+  return { calmRegimeScalp: true, ...(override ? { minConfidence: override } : {}) };
 }
 
 const pathStrategy: SimEngineStrategy = {
